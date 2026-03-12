@@ -9,3 +9,5 @@ pyyaml
 joblib
 matplotlib
 optuna
+shap
+streamlit
