@@ -1,0 +1,30 @@
+data:
+  raw_path: data/raw/telco_churn.csv
+
+split:
+  train_size: 0.70
+  dev_size: 0.15
+  random_state: 42
+
+models:
+  logistic_regression:
+    max_iter: 2000
+  xgboost:
+    n_estimators: 400
+    learning_rate: 0.05
+    max_depth: 4
+    subsample: 0.9
+    colsample_bytree: 0.9
+    min_child_weight: 1
+    reg_lambda: 1.0
+
+mlflow:
+  tracking_uri: file:./mlruns
+  experiment_name: customer-churn-prod-initial-models
+
+artifacts:
+  dir: artifacts
+
+tuning:
+  n_trials: 30
+  objective_metric: roc_auc
