@@ -12,6 +12,7 @@ import mlflow.sklearn
 import numpy as np
 import pandas as pd
 import yaml
+import shap
 from mlflow.models import infer_signature
 from sklearn.calibration import calibration_curve
 from sklearn.linear_model import LogisticRegression
@@ -199,10 +200,95 @@ def save_feature_importance_from_pipeline(pipeline: Pipeline, outpath: Path, top
     plt.savefig(outpath, dpi=150)
     plt.close()
 
+def save_shap_summary_from_pipeline(
+    pipeline: Pipeline,
+    X_sample: pd.DataFrame,
+    outpath: Path,
+    top_n: int = 20,
+) -> None:
+    model = pipeline.named_steps["model"]
+    preprocessor = pipeline.named_steps["preprocessor"]
+
+    # SHAP support here is focused on tree models
+    if not hasattr(model, "feature_importances_"):
+        return
+
+    try:
+        X_transformed = preprocessor.transform(X_sample)
+        feature_names = preprocessor.get_feature_names_out()
+    except Exception:
+        return
+
+    try:
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(X_transformed)
+
+        # binary classification sometimes returns list
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+
+        plt.figure()
+        shap.summary_plot(
+            shap_values,
+            X_transformed,
+            feature_names=feature_names,
+            max_display=top_n,
+            show=False,
+        )
+        plt.tight_layout()
+        plt.savefig(outpath, dpi=150, bbox_inches="tight")
+        plt.close()
+    except Exception as e:
+        print(f"Skipping SHAP summary plot: {e}")
+
+
+def save_shap_importance_table_from_pipeline(
+    pipeline: Pipeline,
+    X_sample: pd.DataFrame,
+    outpath: Path,
+    top_n: int = 30,
+) -> None:
+    model = pipeline.named_steps["model"]
+    preprocessor = pipeline.named_steps["preprocessor"]
+
+    if not hasattr(model, "feature_importances_"):
+        return
+
+    try:
+        X_transformed = preprocessor.transform(X_sample)
+        feature_names = preprocessor.get_feature_names_out()
+    except Exception:
+        return
+
+    try:
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(X_transformed)
+
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+
+        mean_abs_shap = np.abs(shap_values).mean(axis=0)
+
+        shap_df = (
+            pd.DataFrame(
+                {
+                    "feature": feature_names,
+                    "mean_abs_shap": mean_abs_shap,
+                }
+            )
+            .sort_values("mean_abs_shap", ascending=False)
+            .head(top_n)
+        )
+
+        shap_df.to_csv(outpath, index=False)
+    except Exception as e:
+        print(f"Skipping SHAP importance table: {e}")
+
 
 def log_eval_artifacts(
     model_name: str,
     pipeline: Pipeline,
+    X_sample: pd.DataFrame,
     y_true: pd.Series,
     y_score: np.ndarray,
     threshold: float,
@@ -216,6 +302,8 @@ def log_eval_artifacts(
     cal_path = artifact_dir / f"{model_name}_calibration_curve.png"
     cm_path = artifact_dir / f"{model_name}_confusion_matrix.png"
     fi_path = artifact_dir / f"{model_name}_feature_importance.png"
+    shap_path = artifact_dir / f"{model_name}_shap_summary.png"
+    shap_table_path = artifact_dir / f"{model_name}_shap_importance.csv"
     report_path = artifact_dir / f"{model_name}_classification_report.json"
 
     save_roc_curve(y_true, y_score, roc_path)
@@ -223,6 +311,8 @@ def log_eval_artifacts(
     save_calibration_curve(y_true, y_score, cal_path)
     save_confusion_matrix(y_true, y_pred, cm_path)
     save_feature_importance_from_pipeline(pipeline, fi_path)
+    save_shap_summary_from_pipeline(pipeline, X_sample, shap_path)
+    save_shap_importance_table_from_pipeline(pipeline, X_sample, shap_table_path)
 
     report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
     with open(report_path, "w", encoding="utf-8") as f:
@@ -234,6 +324,10 @@ def log_eval_artifacts(
     mlflow.log_artifact(str(cm_path))
     if fi_path.exists():
         mlflow.log_artifact(str(fi_path))
+    if shap_path.exists():
+        mlflow.log_artifact(str(shap_path))
+    if shap_table_path.exists():
+        mlflow.log_artifact(str(shap_table_path))
     mlflow.log_artifact(str(report_path))
 
     return report
@@ -326,6 +420,7 @@ def main() -> None:
                 log_eval_artifacts(
                     model_name=model_name,
                     pipeline=pipeline,
+                    X_sample=X_dev.head(300),
                     y_true=y_dev,
                     y_score=dev_scores,
                     threshold=threshold,
@@ -349,6 +444,7 @@ def main() -> None:
         log_eval_artifacts(
             model_name="champion_test",
             pipeline=champion_pipeline,
+            X_sample=X_test.head(300),
             y_true=y_test,
             y_score=test_scores,
             threshold=champion_threshold,
