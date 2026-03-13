@@ -4,7 +4,26 @@ import json
 from pathlib import Path
 from typing import Dict, Optional
 
+import numpy as np
 import pandas as pd
+
+
+def _map_feature_to_theme(feature_name: str) -> str:
+    """Lightweight matcher to group features into business-friendly themes."""
+    name = feature_name.lower()
+    if any(k in name for k in ["contract", "paperless", "payment", "month_to_month", "electronic_check", "auto_pay"]):
+        return "Billing & Contract"
+    if any(k in name for k in ["tenure", "customer_stage", "tenure_group"]):
+        return "Customer Lifecycle"
+    if any(k in name for k in ["monthlycharges", "totalcharges", "avg_monthly_spend", "price_ratio", "high_bill", "revenue"]):
+        return "Pricing & Value"
+    if any(k in name for k in ["techsupport", "onlinesecurity", "onlinebackup", "deviceprotection", "support"]):
+        return "Support & Protection"
+    if any(k in name for k in ["internetservice", "fiber", "streaming", "phoneservice", "multipleservices", "num_services", "service"]):
+        return "Product Usage"
+    if any(k in name for k in ["senior", "partner", "dependents", "gender"]):
+        return "Customer Profile"
+    return "Other"
 
 
 def _safe_read_json(path: Path) -> Dict:
@@ -34,6 +53,21 @@ def load_artifacts(artifact_dir: Path) -> Dict:
     }
 
 
+def load_causal_artifacts(artifact_dir: Path) -> Dict:
+    causal_dir = artifact_dir / "causal"
+    summary = _safe_read_json(causal_dir / "summary.json")
+    uplift_table = _safe_read_csv(causal_dir / "uplift_table.csv")
+    cate = _safe_read_csv(causal_dir / "cate.csv")
+    policy = _safe_read_csv(causal_dir / "policy_recommendations.csv")
+
+    return {
+        "summary": summary,
+        "uplift_table": uplift_table,
+        "cate": cate,
+        "policy": policy,
+    }
+
+
 def load_latest_predictions(prediction_dir: Path) -> Optional[pd.DataFrame]:
     if not prediction_dir.exists():
         return None
@@ -60,14 +94,68 @@ def summarize_technical_view(metrics: Dict, metadata: Dict) -> Dict:
     }
 
 
+def summarize_causal_view(causal_artifacts: Dict) -> Dict:
+    summary = causal_artifacts.get("summary", {}) or {}
+    uplift_table = causal_artifacts.get("uplift_table", pd.DataFrame())
+    policy = causal_artifacts.get("policy", pd.DataFrame())
+
+    cumulative_uplift = float(uplift_table.get("cumulative_uplift", pd.Series(dtype=float)).iloc[-1]) if not uplift_table.empty else 0.0
+    top_bin_uplift = float(uplift_table.get("uplift", pd.Series(dtype=float)).iloc[0]) if not uplift_table.empty else 0.0
+
+    insights = []
+    if summary:
+        ate_pct = summary.get("ate", 0.0) * 100
+        direction = "reduced" if summary.get("ate", 0) < 0 else "increased"
+        insights.append(f"Treatment {direction} churn by {abs(ate_pct):.1f} pts on average.")
+        if not pd.isna(summary.get("uplift_top_bin", np.nan)):
+            insights.append(
+                f"Top uplift bin shows {summary.get('uplift_top_bin', 0.0)*100:.1f} pt lift; focus top {summary.get('budget_fraction', 0.0)*100:.0f}% customers."
+            )
+    if policy is not None and not policy.empty:
+        total_gain = float(policy["expected_gain"].sum()) if "expected_gain" in policy.columns else 0.0
+        insights.append(f"Expected net gain from policy: {total_gain:,.1f} value units.")
+
+    return {
+        "ate": float(summary.get("ate", 0.0)),
+        "treated_mean": float(summary.get("treated_mean", 0.0)),
+        "control_mean": float(summary.get("control_mean", 0.0)),
+        "uplift_direction": summary.get("uplift_direction", "unknown"),
+        "qini": float(summary.get("qini", cumulative_uplift)),
+        "top_bin_uplift": float(summary.get("uplift_top_bin", top_bin_uplift)),
+        "budget_fraction": float(summary.get("budget_fraction", 0.0)),
+        "uplift_table": uplift_table,
+        "policy": policy,
+        "cate": causal_artifacts.get("cate", pd.DataFrame()),
+        "insights": insights,
+    }
+
+
+def _theme_summary_from_shap(metadata: Dict) -> pd.DataFrame:
+    shap_source = metadata.get("shap_importance_df")
+    if shap_source is None or shap_source.empty:
+        return pd.DataFrame(columns=["driver_theme", "importance"])
+
+    shap_source = shap_source.copy()
+    shap_source["driver_theme"] = shap_source["feature"].apply(_map_feature_to_theme)
+    theme_summary = (
+        shap_source.groupby("driver_theme")[["mean_abs_shap"]]
+        .sum()
+        .rename(columns={"mean_abs_shap": "importance"})
+        .reset_index()
+        .sort_values("importance", ascending=False)
+    )
+    return theme_summary
+
+
 def summarize_business_view(pred_df: Optional[pd.DataFrame], metadata: Dict) -> Dict:
     if pred_df is None or pred_df.empty:
+        theme_summary = _theme_summary_from_shap(metadata)
         return {
             "high_risk_count": 0,
             "high_risk_rate": 0.0,
             "revenue_at_risk": 0.0,
             "action_summary": pd.DataFrame(),
-            "theme_summary": pd.DataFrame(),
+            "theme_summary": theme_summary,
             "insights": ["No prediction batch available yet."],
         }
 
@@ -107,6 +195,10 @@ def summarize_business_view(pred_df: Optional[pd.DataFrame], metadata: Dict) -> 
         if "primary_driver_theme" in high_risk.columns and not high_risk.empty
         else pd.DataFrame(columns=["driver_theme", "customer_count"])
     )
+
+    # Fallback to global SHAP importance if row-level driver themes are missing
+    if theme_summary.empty:
+        theme_summary = _theme_summary_from_shap(metadata)
 
     top_theme = theme_summary.iloc[0]["driver_theme"] if not theme_summary.empty else "N/A"
 

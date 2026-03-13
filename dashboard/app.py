@@ -11,8 +11,10 @@ sys.path.append(str(ROOT))
 
 from src.dashboard_data import (
     load_artifacts,
+    load_causal_artifacts,
     load_latest_predictions,
     summarize_business_view,
+    summarize_causal_view,
     summarize_technical_view,
     top_risk_customers,
 )
@@ -23,6 +25,7 @@ ARTIFACT_DIR = Path("artifacts")
 PREDICTION_DIR = Path("data/predictions")
 
 artifacts = load_artifacts(ARTIFACT_DIR)
+causal_artifacts = load_causal_artifacts(ARTIFACT_DIR)
 pred_df = load_latest_predictions(PREDICTION_DIR)
 
 metadata = artifacts["metadata"]
@@ -30,14 +33,24 @@ metrics = artifacts["metrics"]
 candidate_results = artifacts["candidate_results"]
 shap_importance = artifacts["shap_importance"]
 
+# expose SHAP table for fallback driver theme aggregation
+metadata["shap_importance_df"] = shap_importance
+
 business = summarize_business_view(pred_df, metadata)
 technical = summarize_technical_view(metrics, metadata)
+causal = summarize_causal_view(causal_artifacts)
 
 st.title("Customer Churn Intelligence Dashboard")
 st.caption("Refresh after a new training or scoring run to load the latest artifacts.")
 
-tab_exec, tab_tech, tab_models, tab_customers = st.tabs(
-    ["Executive Summary", "Technical Performance", "Model Comparison", "High-Risk Customers"]
+tab_exec, tab_tech, tab_models, tab_customers, tab_causal = st.tabs(
+    [
+        "Executive Summary",
+        "Technical Performance",
+        "Model Comparison",
+        "High-Risk Customers",
+        "Causal Uplift",
+    ]
 )
 
 with tab_exec:
@@ -69,9 +82,12 @@ with tab_exec:
         st.markdown("### Dominant Driver Themes")
         if not business["theme_summary"].empty:
             st.dataframe(business["theme_summary"], use_container_width=True)
-            st.bar_chart(
-                business["theme_summary"].set_index("driver_theme")["customer_count"]
+            bar_source = (
+                business["theme_summary"].set_index("driver_theme")["importance"]
+                if "importance" in business["theme_summary"].columns
+                else business["theme_summary"].set_index("driver_theme")["customer_count"]
             )
+            st.bar_chart(bar_source)
         else:
             st.info("No driver theme summary available yet.")
 
@@ -159,3 +175,38 @@ with tab_customers:
             st.bar_chart(high_risk_df["primary_driver_theme"].value_counts())
     else:
         st.info("No scored prediction file found yet.")
+
+with tab_causal:
+    st.subheader("Causal Uplift & Policy")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("ATE (treatment - control)", f"{causal['ate']:.3f}")
+    c2.metric("Top Bin Uplift", f"{causal['top_bin_uplift']:.3f}")
+    c3.metric("Qini / Cum. Uplift", f"{causal['qini']:.3f}")
+    c4.metric("Budget Fraction", f"{causal['budget_fraction']:.0%}")
+
+    if causal.get("insights"):
+        st.markdown("### Executive Takeaways")
+        for insight in causal["insights"]:
+            st.write(f"- {insight}")
+
+    st.markdown("### Uplift Curve")
+    uplift_df = causal.get("uplift_table")
+    if uplift_df is not None and not uplift_df.empty:
+        chart_df = uplift_df[["bin", "cumulative_uplift"]].set_index("bin")
+        st.line_chart(chart_df)
+        st.dataframe(uplift_df, use_container_width=True)
+    else:
+        st.info("No uplift table found. Generate causal artifacts with `src/reporting/causal_report.py`.")
+
+    st.markdown("### Targeting Policy")
+    policy_df = causal.get("policy")
+    if policy_df is not None and not policy_df.empty:
+        st.dataframe(policy_df, use_container_width=True)
+    else:
+        st.info("No policy recommendations available yet.")
+
+    cate_df = causal.get("cate")
+    if cate_df is not None and not cate_df.empty:
+        st.markdown("### Segment CATE (largest absolute uplift first)")
+        st.dataframe(cate_df.head(10), use_container_width=True)

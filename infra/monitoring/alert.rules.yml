@@ -1,0 +1,17 @@
+groups:
+  - name: api_alerts
+    rules:
+      - alert: HighErrorRate
+        expr: sum(rate(fastapi_requests_total{status!~"2.."}[5m])) / sum(rate(fastapi_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          description: "High non-2xx response rate on churn API"
+      - alert: HighLatency
+        expr: histogram_quantile(0.95, sum(rate(fastapi_requests_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          description: "p95 latency above 1s on churn API"

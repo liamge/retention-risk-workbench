@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 
 from src.features import engineer_features
@@ -14,8 +18,28 @@ from src.features import engineer_features
 ARTIFACT_DIR = Path("artifacts")
 MODEL = joblib.load(ARTIFACT_DIR / "model.pkl") if (ARTIFACT_DIR / "model.pkl").exists() else None
 METADATA = json.loads((ARTIFACT_DIR / "model_metadata.json").read_text()) if (ARTIFACT_DIR / "model_metadata.json").exists() else None
+API_KEY = os.getenv("API_KEY")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-app = FastAPI(title="Customer Churn Scoring API", version="0.1.0")
+# Patch older pickled models that may miss attributes after version bumps
+def _patch_model(model):
+    try:
+        lr = model.named_steps.get("model") if hasattr(model, "named_steps") else None
+        if lr and lr.__class__.__name__ == "LogisticRegression" and not hasattr(lr, "multi_class"):
+            lr.multi_class = "auto"
+    except Exception:
+        pass
+    return model
+
+app = FastAPI(title="Customer Churn Scoring API", version="0.2.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# Expose /metrics for Prometheus scraping (must be added before startup)
+Instrumentator().instrument(app).expose(app)
 
 
 class CustomerPayload(BaseModel):
@@ -50,6 +74,16 @@ class PredictionResponse(BaseModel):
     threshold: float
 
 
+def verify_api_key(api_key: Optional[str] = Depends(api_key_header)) -> Optional[str]:
+    if API_KEY and api_key != API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key",
+            headers={"WWW-Authenticate": "API-Key"},
+        )
+    return api_key
+
+
 def risk_tier(prob: float) -> str:
     if prob < 0.30:
         return "low"
@@ -72,11 +106,13 @@ def _predict_dicts(records: List[Dict[str, Any]]) -> List[PredictionResponse]:
     if MODEL is None or METADATA is None:
         raise RuntimeError("Model artifacts not found. Train the model first.")
 
+    model = _patch_model(MODEL)
+
     df = pd.DataFrame(records)
     features = engineer_features(df)
     drop_cols = [c for c in ["customerID", "Churn", "ChurnFlag"] if c in features.columns]
     X = features.drop(columns=drop_cols)
-    scores = MODEL.predict_proba(X)[:, 1]
+    scores = model.predict_proba(X)[:, 1]
     threshold = float(METADATA["threshold"])
 
     outputs = []
@@ -105,10 +141,10 @@ def model_info() -> Dict[str, Any]:
 
 
 @app.post("/predict", response_model=PredictionResponse)
-def predict(payload: CustomerPayload) -> PredictionResponse:
+def predict(payload: CustomerPayload, _: Optional[str] = Depends(verify_api_key)) -> PredictionResponse:
     return _predict_dicts([payload.model_dump()])[0]
 
 
 @app.post("/batch-predict", response_model=List[PredictionResponse])
-def batch_predict(payloads: List[CustomerPayload]) -> List[PredictionResponse]:
+def batch_predict(payloads: List[CustomerPayload], _: Optional[str] = Depends(verify_api_key)) -> List[PredictionResponse]:
     return _predict_dicts([p.model_dump() for p in payloads])

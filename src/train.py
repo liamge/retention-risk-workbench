@@ -11,8 +11,8 @@ import mlflow
 import mlflow.sklearn
 import numpy as np
 import pandas as pd
-import yaml
 import shap
+import yaml
 from mlflow.models import infer_signature
 from sklearn.calibration import calibration_curve
 from sklearn.linear_model import LogisticRegression
@@ -39,6 +39,7 @@ except Exception as e:
     XGBOOST_AVAILABLE = False
 
 from src.features import build_feature_frame, make_preprocessor
+from src.kkbox_features import build_kkbox_feature_frame, make_kkbox_preprocessor
 
 
 def parse_args() -> argparse.Namespace:
@@ -82,6 +83,28 @@ def split_data(X, y, cfg: Dict):
         stratify=y_temp,
         random_state=random_state,
     )
+    return X_train, X_dev, X_test, y_train, y_dev, y_test
+
+
+def time_based_split(X, y, cfg: Dict):
+    train_end = pd.to_datetime(cfg["split"]["train_end"])
+    dev_end = pd.to_datetime(cfg["split"]["dev_end"])
+
+    if "transaction_date" not in X.columns:
+        raise ValueError("transaction_date column required for time-based split.")
+
+    tx = pd.to_datetime(X["transaction_date"], errors="coerce")
+
+    train_mask = tx <= train_end
+    dev_mask = (tx > train_end) & (tx <= dev_end)
+    test_mask = tx > dev_end
+
+    if not train_mask.any() or not dev_mask.any() or not test_mask.any():
+        raise ValueError("Time split produced empty partitions; adjust train_end/dev_end in config.")
+
+    X_train, y_train = X[train_mask], y[train_mask]
+    X_dev, y_dev = X[dev_mask], y[dev_mask]
+    X_test, y_test = X[test_mask], y[test_mask]
     return X_train, X_dev, X_test, y_train, y_dev, y_test
 
 
@@ -251,38 +274,44 @@ def save_shap_importance_table_from_pipeline(
     model = pipeline.named_steps["model"]
     preprocessor = pipeline.named_steps["preprocessor"]
 
-    if not hasattr(model, "feature_importances_"):
-        return
-
     try:
         X_transformed = preprocessor.transform(X_sample)
         feature_names = preprocessor.get_feature_names_out()
     except Exception:
         return
 
-    try:
-        explainer = shap.TreeExplainer(model)
-        shap_values = explainer.shap_values(X_transformed)
+    # Tree models: use SHAP TreeExplainer; linear models: fall back to coefficient magnitude
+    if hasattr(model, "feature_importances_"):
+        try:
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer.shap_values(X_transformed)
 
-        if isinstance(shap_values, list):
-            shap_values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+            if isinstance(shap_values, list):
+                shap_values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
 
-        mean_abs_shap = np.abs(shap_values).mean(axis=0)
+            mean_abs_shap = np.abs(shap_values).mean(axis=0)
+        except Exception as e:
+            print(f"Skipping SHAP TreeExplainer; falling back to feature_importances_: {e}")
+            mean_abs_shap = np.abs(getattr(model, "feature_importances_", np.zeros(len(feature_names))))
+    elif hasattr(model, "coef_"):
+        coef = getattr(model, "coef_", None)
+        coef = coef[0] if coef is not None and coef.ndim > 1 else coef
+        mean_abs_shap = np.abs(coef) if coef is not None else np.zeros(len(feature_names))
+    else:
+        return
 
-        shap_df = (
-            pd.DataFrame(
-                {
-                    "feature": feature_names,
-                    "mean_abs_shap": mean_abs_shap,
-                }
-            )
-            .sort_values("mean_abs_shap", ascending=False)
-            .head(top_n)
+    shap_df = (
+        pd.DataFrame(
+            {
+                "feature": feature_names,
+                "mean_abs_shap": mean_abs_shap,
+            }
         )
+        .sort_values("mean_abs_shap", ascending=False)
+        .head(top_n)
+    )
 
-        shap_df.to_csv(outpath, index=False)
-    except Exception as e:
-        print(f"Skipping SHAP importance table: {e}")
+    shap_df.to_csv(outpath, index=False)
 
 
 def log_eval_artifacts(
@@ -343,15 +372,23 @@ def main() -> None:
     mlflow.set_experiment(experiment_name)
 
     data_path = cfg["data"]["raw_path"]
+    dataset_type = cfg["data"].get("dataset_type", "telco")
     artifact_dir = ensure_dir(cfg["artifacts"]["dir"])
     figure_dir = ensure_dir(artifact_dir / "figures")
 
     raw_df = pd.read_csv(data_path)
-    feature_artifacts = build_feature_frame(raw_df)
-    X, y = feature_artifacts.X, feature_artifacts.y
 
-    X_train, X_dev, X_test, y_train, y_dev, y_test = split_data(X, y, cfg)
-    preprocessor = make_preprocessor(feature_artifacts.numeric_cols, feature_artifacts.categorical_cols)
+    if dataset_type == "kkbox":
+        feature_artifacts = build_kkbox_feature_frame(raw_df)
+        preprocessor = make_kkbox_preprocessor(feature_artifacts.numeric_cols, feature_artifacts.categorical_cols)
+        X_split = time_based_split
+    else:
+        feature_artifacts = build_feature_frame(raw_df)
+        preprocessor = make_preprocessor(feature_artifacts.numeric_cols, feature_artifacts.categorical_cols)
+        X_split = split_data
+
+    X, y = feature_artifacts.X, feature_artifacts.y
+    X_train, X_dev, X_test, y_train, y_dev, y_test = X_split(X, y, cfg)
 
     class_ratio = float((y_train == 0).sum() / max((y_train == 1).sum(), 1))
 
@@ -373,19 +410,21 @@ def main() -> None:
             min_child_weight=cfg["models"]["xgboost"].get("min_child_weight", 1),
             reg_lambda=cfg["models"]["xgboost"].get("reg_lambda", 1.0),
             scale_pos_weight=cfg["models"]["xgboost"].get("scale_pos_weight", class_ratio),
-            random_state=cfg["split"]["random_state"],
+            random_state=cfg["split"].get("random_state", 42),
         )
 
     results = []
     pipelines = {}
 
-    with mlflow.start_run(run_name="train-champion"):
+    with mlflow.start_run(run_name=f"train-champion-{dataset_type}"):
         mlflow.log_params(
             {
                 "data_path": data_path,
-                "train_size": cfg["split"]["train_size"],
-                "dev_size": cfg["split"]["dev_size"],
-                "random_state": cfg["split"]["random_state"],
+                **({} if "train_size" not in cfg["split"] else {"train_size": cfg["split"]["train_size"]}),
+                **({} if "dev_size" not in cfg["split"] else {"dev_size": cfg["split"]["dev_size"]}),
+                **({} if "random_state" not in cfg["split"] else {"random_state": cfg["split"]["random_state"]}),
+                **({} if "train_end" not in cfg["split"] else {"train_end": cfg["split"]["train_end"]}),
+                **({} if "dev_end" not in cfg["split"] else {"dev_end": cfg["split"]["dev_end"]}),
             }
         )
 
@@ -463,6 +502,15 @@ def main() -> None:
             "categorical_cols": feature_artifacts.categorical_cols,
             "feature_columns": list(X.columns),
             "test_metrics": test_metrics,
+            "dataset_type": dataset_type,
+            "time_split": (
+                {
+                    "train_end": cfg["split"]["train_end"],
+                    "dev_end": cfg["split"]["dev_end"],
+                }
+                if "train_end" in cfg["split"]
+                else None
+            ),
         }
 
         joblib.dump(champion_pipeline, artifact_dir / "model.pkl")

@@ -1,20 +1,25 @@
-# Python cache
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.pyo
 
-# Virtual environments
+# environments
 .venv/
 venv/
-env/
 
-# Jupyter
-.ipynb_checkpoints/
-
-# OS files
+# OS
 .DS_Store
 
-# ML artifacts (optional but usually recommended)
+# notebooks
+.ipynb_checkpoints/
+
+# ML artifacts
 mlruns/
 artifacts/
 data/predictions/
+
+# logs
+*.log
+
+# Streamlit cache
+.streamlit/

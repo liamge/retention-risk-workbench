@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    image: churn-risk-api:latest
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 2
+    environment:
+      API_KEY: ${API_KEY:-demo-key}  # demo only; replace with secret store in production
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../artifacts:/app/artifacts:ro
+    depends_on:
+      - mlflow
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.10.0
+    command: mlflow server --backend-store-uri sqlite:///mlruns.db --default-artifact-root /mlartifacts --host 0.0.0.0 --port 5000
+    volumes:
+      - mlruns-data:/mlartifacts
+    ports:
+      - "5050:5000"
+
+  prometheus:
+    image: prom/prometheus:v2.49.0
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  mlruns-data:
+  grafana-data:

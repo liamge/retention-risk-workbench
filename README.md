@@ -14,6 +14,8 @@ This project focuses on the full lifecycle of a predictive model:
 
 The goal is to demonstrate how machine learning models move from experimentation into **production‑ready decision support tools**.
 
+If you want to showcase enterprise deployment readiness, see **Deployment & Ops** below for Docker, Kubernetes, managed endpoint options, monitoring/alerting, and auth hardening. These assets are provided for demos/portfolio only—they are not hardened for internet-facing production use.
+
 ---
 
 # Project Overview
@@ -282,6 +284,21 @@ Possible enhancements include:
 * survival analysis
 * data drift detection
 * automated retraining pipeline
+
+---
+
+# Deployment & Ops
+
+This repo now includes sample production scaffolding:
+
+* Container: `infra/Dockerfile` builds the FastAPI scoring service; mount `artifacts/` with the trained model.
+* Local stack: `infra/docker-compose.yml` runs the API, MLflow tracking server, Prometheus, and Grafana with alert rules in `infra/monitoring`.
+* Kubernetes: `infra/k8s/deployment.yaml` includes Deployment + Service + HPA + TLS Ingress; plug in your image registry and secrets.
+* Managed endpoints: guidelines in `infra/README.md` for AWS SageMaker, GCP Vertex AI, or Azure ML online endpoints.
+* Security: API-key guard on `/predict` and `/batch-predict` (header `X-API-Key`); front with an API gateway for OIDC/JWT and rate limiting.
+* Observability: `/metrics` exposes Prometheus metrics; Grafana dashboard/alerts can page on error-rate/latency; logs stream to your centralized sink.
+
+See `infra/README.md` for commands and a CI/CD outline.
 
 ---
 

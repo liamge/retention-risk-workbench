@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+# NOTE: Demo-only manifests. Add network policies, pod security standards, image signing, and secret management before any production exposure.
+kind: Deployment
+metadata:
+  name: churn-api
+  labels:
+    app: churn-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: churn-api
+  template:
+    metadata:
+      labels:
+        app: churn-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/your-org/churn-risk-api:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: churn-api-secrets
+                  key: api-key
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow:5000"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: churn-api
+spec:
+  selector:
+    app: churn-api
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: churn-api-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: churn-api
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: churn-api
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+spec:
+  tls:
+    - hosts:
+        - churn-api.example.com
+      secretName: churn-api-tls
+  rules:
+    - host: churn-api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: churn-api
+                port:
+                  number: 80

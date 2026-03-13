@@ -2,12 +2,15 @@ pandas
 numpy
 scikit-learn
 xgboost
+lifelines
 mlflow
 fastapi
 uvicorn
+prometheus-fastapi-instrumentator
 pyyaml
 joblib
 matplotlib
 optuna
 shap
 streamlit
+gunicorn

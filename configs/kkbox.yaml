@@ -1,0 +1,32 @@
+data:
+  raw_path: data/processed/kkbox_churn.csv
+  dataset_type: kkbox
+
+split:
+  # Use a time-based cutoff for train/dev/test. Dates are YYYY-MM-DD on transaction_date.
+  train_end: 2017-01-31
+  dev_end: 2017-02-28
+  random_state: 42
+
+models:
+  logistic_regression:
+    max_iter: 2000
+  xgboost:
+    n_estimators: 500
+    learning_rate: 0.05
+    max_depth: 5
+    subsample: 0.9
+    colsample_bytree: 0.9
+    min_child_weight: 1
+    reg_lambda: 1.0
+
+artifacts:
+  dir: artifacts/kkbox
+
+mlflow:
+  tracking_uri: file:./mlruns
+  experiment_name: kkbox-time-churn
+
+tuning:
+  n_trials: 30
+  objective_metric: roc_auc
