@@ -1,6 +1,6 @@
 data:
   dataset_type: kkbox
-  feature_path: data/processed/kkbox_features_duckdb_cleaned.parquet
+  feature_path: data/processed/kkbox_features_duckdb_cleaned_train.parquet
   target_col: is_churn
   sample_frac: 0.1        # downsample for local training; adjust as needed
   sample_random_state: 42
@@ -44,4 +44,4 @@ artifacts:
 tuning:
   n_trials: 30
   objective_metric: roc_auc
-  algorithm: xgboost  # options: xgboost, lightgbm
+  algorithm: lightgbm  # options: xgboost, lightgbm

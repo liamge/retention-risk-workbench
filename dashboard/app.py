@@ -88,13 +88,14 @@ with tab_exec:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("High-Risk Users", business["high_risk_count"])
         c2.metric("High-Risk Rate", f"{business['high_risk_rate']:.1%}")
-        c3.metric("Avg Churn Probability", f"{avg_prob:.2%}")
-        c4.metric("Top Driver Theme", top_theme)
+        c3.metric("Revenue at Risk", f"${business['revenue_at_risk']:,.0f}")
+        c4.metric("Expected Monthly Loss", f"${business.get('expected_loss_total', 0):,.0f}")
 
         st.markdown("**KKBox Risk Story**")
         st.write(
             "- High-risk users are those above the model threshold; focus outreach here.\n"
-            "- Driver themes reflect engagement and transaction signals driving churn.\n"
+            "- Revenue metrics reflect expected loss using recent payment behavior.\n"
+            f"- Top driver theme currently: **{top_theme}**. Broaden outreach playbooks accordingly.\n"
             "- Use the Technical and Model tabs to inspect curves and SHAP details."
         )
     else:

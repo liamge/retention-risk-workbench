@@ -1,10 +1,13 @@
+import warnings
 from pathlib import Path
 from typing import List
 
 import duckdb
 import pandas as pd
+import yaml
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
+from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -25,6 +28,7 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 BASE_OUTPUT_PATH = OUTPUT_DIR / "kkbox_features_base.parquet"
 OUTPUT_PATH = OUTPUT_DIR / "kkbox_features_duckdb_cleaned.parquet"
+DEFAULT_CONFIG_PATH = Path("configs/kkbox.yaml")
 
 DEFAULT_TARGET_COL = "is_churn"
 DEFAULT_ID_COL = "msno"
@@ -123,6 +127,7 @@ def build_feature_table(
     test_date_col: str = "latest_transaction_date",
     test_cutoff: str | None = None,
     test_output_path: str | Path | None = None,
+    config_path: str | Path | None = None,
 ) -> None:
     train_path = _sql_path(train_path)
     members_path = _sql_path(members_path)
@@ -130,6 +135,96 @@ def build_feature_table(
     user_logs_path = _sql_path(user_logs_path)
     output_path = Path(output_path)
     base_output_path = Path(base_output_path) if base_output_path is not None else None
+
+    def _derive_split_paths(base_output: Path, explicit_test: Path | None = None) -> tuple[Path, Path]:
+        """Return train and test parquet destinations next to the base file."""
+        test_out = explicit_test or base_output.with_name(base_output.stem + "_test.parquet")
+        train_out = base_output.with_name(base_output.stem + "_train.parquet")
+        return train_out, test_out
+
+    def _split_for_artifacts(df: pd.DataFrame, split_cfg: dict, target_col: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Return (train_df, test_df) using the configured strategy.
+        Dev split is intentionally left to training code.
+        """
+        strategy = split_cfg.get("strategy", "random")
+        if target_col not in df.columns:
+            raise ValueError(f"Expected target column '{target_col}' present to perform split.")
+
+        if strategy == "random":
+            random_state = split_cfg.get("random_state", 42)
+            train_size = split_cfg.get("train_size", 0.7)
+            dev_size = split_cfg.get("dev_size", 0.15)
+            test_size = 1.0 - train_size - dev_size
+            if test_size <= 0:
+                raise ValueError("train_size + dev_size must be less than 1.0 for random split.")
+
+            stratify = df[target_col]
+            train_df, test_df = train_test_split(
+                df,
+                test_size=test_size,
+                stratify=stratify,
+                random_state=random_state,
+            )
+            return train_df, test_df
+
+        if strategy == "time":
+            dev_end = pd.to_datetime(split_cfg["dev_end"])
+            date_col = split_cfg.get("date_col", "latest_transaction_date")
+            if date_col not in df.columns:
+                raise ValueError(f"Time-based split requires date column '{date_col}'.")
+
+            date_series = pd.to_datetime(df[date_col], errors="coerce")
+            train_dev_mask = date_series <= dev_end
+            test_mask = date_series > dev_end
+
+            if not train_dev_mask.any() or not test_mask.any():
+                fallback = split_cfg.get("fallback", "random")
+                if fallback == "random":
+                    warnings.warn(
+                        "Time-based split produced empty partitions; falling back to stratified random split.",
+                        UserWarning,
+                    )
+                    return _split_for_artifacts(df, {"strategy": "random", **split_cfg}, target_col)
+                raise ValueError(
+                    "Time-based split failed: train/dev or test is empty. Adjust dev_end or set fallback=random."
+                )
+
+            return df.loc[train_dev_mask].copy(), df.loc[test_mask].copy()
+
+        raise ValueError(f"Unknown split strategy '{strategy}'. Expected 'random' or 'time'.")
+
+    def _maybe_split_existing() -> bool:
+        """If features already exist and splits are missing, create them from config and short-circuit."""
+        if not split_test or not reuse_existing or not output_path.exists():
+            return False
+
+        train_out, test_out = _derive_split_paths(output_path, Path(test_output_path) if test_output_path else None)
+        if train_out.exists() and test_out.exists():
+            print("Cleaned dataset and splits already exist; skipping build.")
+            return True
+
+        if config_path is None:
+            raise ValueError("split_test=True with existing dataset requires config_path to read split strategy.")
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+
+        print(f"Found existing cleaned dataset at {output_path}; creating splits using {config_path}...")
+        df = pd.read_parquet(output_path)
+        train_df, test_df = _split_for_artifacts(df, cfg.get("split", {}), DEFAULT_TARGET_COL)
+
+        train_out.parent.mkdir(parents=True, exist_ok=True)
+        train_df.to_parquet(train_out, index=False)
+        test_df.to_parquet(test_out, index=False)
+
+        print(f"Split counts -> train: {len(train_df)}, test: {len(test_df)}")
+        print(f"Train saved to: {train_out}")
+        print(f"Test saved to:  {test_out}")
+        return True
+
+    if _maybe_split_existing():
+        return
 
     if force_recap_only:
         if base_output_path is None or not base_output_path.exists():
@@ -807,28 +902,25 @@ def build_feature_table(
     print(f"Saved cleaned feature table to: {output_path}")
 
     if split_test:
-        if test_cutoff is None:
-            raise ValueError("split_test=True requires test_cutoff (YYYY-MM-DD).")
-        if test_output_path is None:
-            raise ValueError("split_test=True requires test_output_path.")
-        if test_date_col not in base_df.columns:
-            raise ValueError(f"split_test=True requires date column '{test_date_col}' in the feature table.")
+        if config_path is None:
+            raise ValueError("split_test=True requires config_path to read split strategy.")
 
-        test_cut = pd.to_datetime(test_cutoff)
-        date_series = pd.to_datetime(base_df[test_date_col], errors="coerce")
-        test_df = base_df[date_series > test_cut].copy()
-        train_dev_df = base_df[date_series <= test_cut].copy()
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
 
-        test_out = Path(test_output_path)
-        test_out.parent.mkdir(parents=True, exist_ok=True)
+        train_out, test_out = _derive_split_paths(output_path, Path(test_output_path) if test_output_path else None)
+        train_df, test_df = _split_for_artifacts(base_df, cfg.get("split", {}), DEFAULT_TARGET_COL)
+
+        train_out.parent.mkdir(parents=True, exist_ok=True)
+        train_df.to_parquet(train_out, index=False)
         test_df.to_parquet(test_out, index=False)
 
-        train_dev_out = Path(output_path).with_name(Path(output_path).stem + "_train_dev.parquet")
-        train_dev_df.to_parquet(train_dev_out, index=False)
-
-        print(f"Split by {test_date_col} > {test_cutoff}: train/dev={len(train_dev_df)}, test={len(test_df)}")
-        print(f"Wrote train/dev to: {train_dev_out}")
-        print(f"Wrote test to: {test_out}")
+        print(
+            "Split using config proportions: "
+            f"train={len(train_df)}, test={len(test_df)}"
+        )
+        print(f"Wrote train to: {train_out}")
+        print(f"Wrote test to:  {test_out}")
 
 
 def build_kkbox_feature_frame(
@@ -900,8 +992,9 @@ if __name__ == "__main__":
         add_capped_features=True,
         reuse_existing=True,
         force_recap_only=False,
-        split_test=False,
+        split_test=True,
         test_date_col="latest_transaction_date",
         test_cutoff="2017-02-28",
         test_output_path=OUTPUT_DIR / "kkbox_test.parquet",
+        config_path=DEFAULT_CONFIG_PATH,
     )

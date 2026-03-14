@@ -194,11 +194,21 @@ def summarize_business_view(pred_df: Optional[pd.DataFrame], metadata: Dict) -> 
 
     high_risk = pred_df[pred_df["churn_probability"] >= threshold].copy()
 
-    monthly_col = "MonthlyCharges" if "MonthlyCharges" in pred_df.columns else None
-    if monthly_col:
-        revenue_at_risk = float((high_risk["churn_probability"] * high_risk[monthly_col]).sum())
+    value_col = None
+    for cand in ["estimated_monthly_value", "MonthlyCharges", "avg_amount_paid", "latest_actual_amount_paid", "amount_paid_per_txn"]:
+        if cand in pred_df.columns:
+            value_col = cand
+            break
+
+    if value_col:
+        base_values = pred_df[value_col].fillna(0).clip(lower=0)
+        revenue_at_risk = float((high_risk["churn_probability"] * high_risk[value_col].fillna(0).clip(lower=0)).sum())
+        expected_loss_total = float((pred_df["churn_probability"] * base_values).sum())
+        avg_value_high_risk = float(high_risk[value_col].mean()) if not high_risk.empty else 0.0
     else:
         revenue_at_risk = 0.0
+        expected_loss_total = 0.0
+        avg_value_high_risk = 0.0
 
     action_summary = (
         high_risk["recommended_action"]
@@ -226,7 +236,9 @@ def summarize_business_view(pred_df: Optional[pd.DataFrame], metadata: Dict) -> 
 
     insights = [
         f"{len(high_risk)} customers are above the current intervention threshold.",
-        f"Estimated near-term revenue at risk is ${revenue_at_risk:,.0f}.",
+        f"Estimated near-term revenue at risk (high-risk only): ${revenue_at_risk:,.0f}.",
+        f"Portfolio-wide expected churn loss: ${expected_loss_total:,.0f} per month.",
+        f"Average value of a high-risk customer: ${avg_value_high_risk:,.0f}.",
         f"The most common driver theme among high-risk customers is {top_theme}.",
     ]
 
@@ -234,6 +246,8 @@ def summarize_business_view(pred_df: Optional[pd.DataFrame], metadata: Dict) -> 
         "high_risk_count": int(len(high_risk)),
         "high_risk_rate": float(len(high_risk) / len(pred_df)),
         "revenue_at_risk": revenue_at_risk,
+        "expected_loss_total": expected_loss_total,
+        "avg_value_high_risk": avg_value_high_risk,
         "action_summary": action_summary,
         "theme_summary": theme_summary,
         "insights": insights,
