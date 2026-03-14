@@ -21,8 +21,26 @@ from src.dashboard_data import (
 
 st.set_page_config(page_title="Customer Churn Intelligence Dashboard", layout="wide")
 
-ARTIFACT_DIR = Path("artifacts")
-PREDICTION_DIR = Path("data/predictions")
+ROOT_ARTIFACT_DIR = Path("artifacts")
+ROOT_PREDICTION_DIR = Path("data/predictions")
+
+
+def _discover_artifact_options(root_dir: Path) -> dict[str, Path]:
+    options = {"telco (artifacts/)": root_dir}
+    if root_dir.exists():
+        for sub in sorted(root_dir.iterdir()):
+            if sub.is_dir() and (sub / "model_metadata.json").exists():
+                options[f"{sub.name} (artifacts/{sub.name})"] = sub
+    return options
+
+
+artifact_options = _discover_artifact_options(ROOT_ARTIFACT_DIR)
+selected_label = st.sidebar.selectbox("Choose dataset artifacts", list(artifact_options.keys()))
+ARTIFACT_DIR = artifact_options[selected_label]
+
+# Align predictions to dataset folder when present
+pred_subdir = ARTIFACT_DIR.name if ARTIFACT_DIR != ROOT_ARTIFACT_DIR else ""
+PREDICTION_DIR = ROOT_PREDICTION_DIR / pred_subdir if pred_subdir else ROOT_PREDICTION_DIR
 
 artifacts = load_artifacts(ARTIFACT_DIR)
 causal_artifacts = load_causal_artifacts(ARTIFACT_DIR)
@@ -42,6 +60,7 @@ causal = summarize_causal_view(causal_artifacts)
 
 st.title("Customer Churn Intelligence Dashboard")
 st.caption("Refresh after a new training or scoring run to load the latest artifacts.")
+st.caption(f"Artifacts: {ARTIFACT_DIR} | Predictions: {PREDICTION_DIR}")
 
 tab_exec, tab_tech, tab_models, tab_customers, tab_causal = st.tabs(
     [
@@ -53,14 +72,37 @@ tab_exec, tab_tech, tab_models, tab_customers, tab_causal = st.tabs(
     ]
 )
 
+is_kkbox = "kkbox" in ARTIFACT_DIR.name.lower()
+
 with tab_exec:
     st.subheader("Executive Summary")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Champion Model", metadata.get("champion_model", "N/A"))
-    c2.metric("High-Risk Customers", business["high_risk_count"])
-    c3.metric("High-Risk Rate", f"{business['high_risk_rate']:.1%}")
-    c4.metric("Revenue at Risk", f"${business['revenue_at_risk']:,.0f}")
+    if is_kkbox:
+        # KKBox-specific overview
+        avg_prob = float(pred_df["churn_probability"].mean()) if pred_df is not None and "churn_probability" in pred_df.columns else 0.0
+        top_theme = (
+            business["theme_summary"].iloc[0]["driver_theme"]
+            if not business["theme_summary"].empty
+            else "N/A"
+        )
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("High-Risk Users", business["high_risk_count"])
+        c2.metric("High-Risk Rate", f"{business['high_risk_rate']:.1%}")
+        c3.metric("Avg Churn Probability", f"{avg_prob:.2%}")
+        c4.metric("Top Driver Theme", top_theme)
+
+        st.markdown("**KKBox Risk Story**")
+        st.write(
+            "- High-risk users are those above the model threshold; focus outreach here.\n"
+            "- Driver themes reflect engagement and transaction signals driving churn.\n"
+            "- Use the Technical and Model tabs to inspect curves and SHAP details."
+        )
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Champion Model", metadata.get("champion_model", "N/A"))
+        c2.metric("High-Risk Customers", business["high_risk_count"])
+        c3.metric("High-Risk Rate", f"{business['high_risk_rate']:.1%}")
+        c4.metric("Revenue at Risk", f"${business['revenue_at_risk']:,.0f}")
 
     st.markdown("### Key Insights")
     for insight in business["insights"]:

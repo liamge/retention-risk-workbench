@@ -3,45 +3,83 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Dict, Tuple
 
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import yaml
 from sklearn.metrics import ConfusionMatrixDisplay, PrecisionRecallDisplay, RocCurveDisplay
 from sklearn.model_selection import train_test_split
 
-from features import build_feature_frame
+from src.features import build_feature_frame
+from src.kkbox_features import build_kkbox_feature_frame
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate saved churn model and write figures/reports.")
-    parser.add_argument("--data-path", type=str, default="data/raw/telco_churn.csv")
-    parser.add_argument("--artifact-dir", type=str, default="artifacts")
+    parser.add_argument("--config", type=str, default="configs/base.yaml")
+    parser.add_argument("--data-path", type=str, default=None, help="Optional override for data path")
+    parser.add_argument("--artifact-dir", type=str, default=None, help="Optional override for artifact dir")
     parser.add_argument("--report-dir", type=str, default="reports")
-    parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args()
+
+
+def load_config(path: str) -> Dict:
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def time_based_split(X, y, cfg: Dict) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.Series]:
+    train_end = pd.to_datetime(cfg["split"]["train_end"])
+    dev_end = pd.to_datetime(cfg["split"]["dev_end"])
+
+    if "transaction_date" not in X.columns:
+        raise ValueError("transaction_date column required for time-based split.")
+
+    tx = pd.to_datetime(X["transaction_date"], errors="coerce")
+
+    train_mask = tx <= train_end
+    dev_mask = (tx > train_end) & (tx <= dev_end)
+    test_mask = tx > dev_end
+
+    if not train_mask.any() or not dev_mask.any() or not test_mask.any():
+        raise ValueError("Time split produced empty partitions; adjust train_end/dev_end in config.")
+
+    X_train, y_train = X[train_mask], y[train_mask]
+    X_dev, y_dev = X[dev_mask], y[dev_mask]
+    X_test, y_test = X[test_mask], y[test_mask]
+    return X_train, X_dev, X_test, y_train, y_dev, y_test
 
 
 def main() -> None:
     args = parse_args()
-    artifact_dir = Path(args.artifact_dir)
+    cfg = load_config(args.config)
+
+    data_path = args.data_path or cfg["data"]["raw_path"]
+    dataset_type = cfg["data"].get("dataset_type", "telco")
+    target_col = cfg["data"].get("target_col", "Churn" if dataset_type == "telco" else "is_churn")
+    artifact_dir = Path(args.artifact_dir or cfg["artifacts"]["dir"])
     report_dir = Path(args.report_dir)
     report_dir.mkdir(parents=True, exist_ok=True)
     figure_dir = report_dir / "figures"
     figure_dir.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_csv(args.data_path)
-    fa = build_feature_frame(df)
+    df = pd.read_csv(data_path)
+    if dataset_type == "kkbox":
+        fa = build_kkbox_feature_frame(df, target_col=target_col)
+        splitter = time_based_split
+    else:
+        fa = build_feature_frame(df)
+        splitter = lambda X, y, cfg: train_test_split(  # type: ignore
+            X, y, test_size=0.30, stratify=y, random_state=cfg["split"].get("random_state", 42)
+        )
+
     X, y = fa.X, fa.y
 
     # Mirror the split used in training for a simple first pass.
-    X_train, X_temp, y_train, y_temp = train_test_split(
-        X, y, test_size=0.30, stratify=y, random_state=args.random_state
-    )
-    X_dev, X_test, y_dev, y_test = train_test_split(
-        X_temp, y_temp, test_size=0.50, stratify=y_temp, random_state=args.random_state
-    )
+    X_train, X_dev, X_test, y_train, y_dev, y_test = splitter(X, y, cfg)
 
     model = joblib.load(artifact_dir / "model.pkl")
     with open(artifact_dir / "model_metadata.json", "r", encoding="utf-8") as f:

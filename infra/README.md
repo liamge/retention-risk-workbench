@@ -21,6 +21,8 @@ This folder adds lightweight artifacts to demonstrate enterprise-grade deploymen
 - Prometheus scrapes `/metrics` (enabled via `prometheus-fastapi-instrumentator`).
 - Grafana (localhost:3000, admin/admin) can import a Prometheus datasource pointing to `http://prometheus:9090` and dashboards for latency/error-rate alerts.
 - Demo caveats: credentials are defaults; no TLS, network policies, or persistence hardening included.
+- MLflow now mounts your repo's `mlruns/` directory into the container and uses it as a file store backend (`file:///mlruns`), so your existing runs/experiments appear in the UI (`http://localhost:5000`).
+- New `dashboard` service builds a separate image (Dockerfile.dashboard) and exposes Streamlit at `http://localhost:8501`.
 
 ## 3) Kubernetes deployment
 - `infra/k8s/deployment.yaml` includes Deployment + Service + HPA + Ingress.

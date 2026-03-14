@@ -18,6 +18,7 @@ except Exception as e:
     SHAP_AVAILABLE = False
 
 from src.features import build_feature_frame
+from src.kkbox_features import build_kkbox_feature_frame
 
 
 def parse_args():
@@ -138,8 +139,13 @@ def main():
     threshold = float(metadata.get("threshold", 0.5))
 
     raw_df = pd.read_csv(args.input)
+    dataset_type = cfg["data"].get("dataset_type", "telco")
+    target_col = cfg["data"].get("target_col", "Churn" if dataset_type == "telco" else "is_churn")
 
-    feature_artifacts = build_feature_frame(raw_df)
+    if dataset_type == "kkbox":
+        feature_artifacts = build_kkbox_feature_frame(raw_df, target_col=target_col)
+    else:
+        feature_artifacts = build_feature_frame(raw_df)
     X = feature_artifacts.X
 
     probs = model.predict_proba(X)[:, 1]

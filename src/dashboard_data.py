@@ -9,8 +9,30 @@ import pandas as pd
 
 
 def _map_feature_to_theme(feature_name: str) -> str:
-    """Lightweight matcher to group features into business-friendly themes."""
+    """Lightweight matcher to group features into business-friendly themes.
+
+    Expanded to cover KKBox feature engineering fields (engagement, renewal, expiry, payments).
+    """
     name = feature_name.lower()
+    # KKBox engagement & listening behavior
+    if any(k in name for k in ["songs_played", "total_secs", "completion_rate", "skip_rate", "near_completion", "quality_score", "repeat_ratio", "log_day", "secs_per_unique", "avg_song"]):
+        return "Engagement & Listening"
+    # KKBox subscription / billing / payments
+    if any(k in name for k in ["payment_method", "payment_plan", "plan_list_price", "actual_amount_paid", "amount_paid", "auto_renew", "cancel", "paid_to_list", "amount_paid_per_txn"]):
+        return "Subscription & Billing"
+    # Renewal / expiry risk
+    if any(k in name for k in ["membership_expire", "post_expiry", "early_renewal", "latest_cancel", "latest_auto_renew"]):
+        return "Renewal & Expiry"
+    # Recency of activity and transactions
+    if any(k in name for k in ["days_since_last", "latest_log", "latest_transaction", "last_log_date", "last_transaction_date"]):
+        return "Recency & Activity"
+    # Content breadth / diversity
+    if any(k in name for k in ["num_unq", "secs_per_unique"]):
+        return "Content Breadth"
+    # Customer profile & registration
+    if any(k in name for k in ["city", "age", "gender", "registered_via", "registration_init", "account_age"]):
+        return "Customer Profile"
+    # Telco legacy themes
     if any(k in name for k in ["contract", "paperless", "payment", "month_to_month", "electronic_check", "auto_pay"]):
         return "Billing & Contract"
     if any(k in name for k in ["tenure", "customer_stage", "tenure_group"]):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import warnings
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -32,11 +33,17 @@ from sklearn.pipeline import Pipeline
 
 try:
     from xgboost import XGBClassifier
-
     XGBOOST_AVAILABLE = True
 except Exception as e:
     print(f"XGBoost unavailable: {e}")
     XGBOOST_AVAILABLE = False
+
+try:
+    from lightgbm import LGBMClassifier
+    LGBM_AVAILABLE = True
+except Exception as e:
+    print(f"LightGBM unavailable: {e}")
+    LGBM_AVAILABLE = False
 
 from src.features import build_feature_frame, make_preprocessor
 from src.kkbox_features import build_kkbox_feature_frame, make_kkbox_preprocessor
@@ -57,6 +64,19 @@ def ensure_dir(path: str | Path) -> Path:
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def read_table(path: str | Path) -> pd.DataFrame:
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Data file not found: {path}")
+
+    if path.suffix.lower() == ".csv":
+        return pd.read_csv(path)
+    if path.suffix.lower() in {".parquet", ".pq"}:
+        return pd.read_parquet(path)
+
+    raise ValueError(f"Unsupported file type for {path}. Use CSV or Parquet.")
 
 
 def split_data(X, y, cfg: Dict):
@@ -86,25 +106,46 @@ def split_data(X, y, cfg: Dict):
     return X_train, X_dev, X_test, y_train, y_dev, y_test
 
 
-def time_based_split(X, y, cfg: Dict):
-    train_end = pd.to_datetime(cfg["split"]["train_end"])
-    dev_end = pd.to_datetime(cfg["split"]["dev_end"])
+def time_based_split_df(df: pd.DataFrame, cfg: Dict, target_col: str):
+    split_cfg = cfg["split"]
+    train_end = pd.to_datetime(split_cfg["train_end"])
+    dev_end = pd.to_datetime(split_cfg["dev_end"])
+    date_col = split_cfg.get("date_col", "latest_transaction_date")
 
-    if "transaction_date" not in X.columns:
-        raise ValueError("transaction_date column required for time-based split.")
+    if date_col not in df.columns:
+        raise ValueError(f"{date_col} column required for time-based split.")
 
-    tx = pd.to_datetime(X["transaction_date"], errors="coerce")
+    tx = pd.to_datetime(df[date_col], errors="coerce")
 
     train_mask = tx <= train_end
     dev_mask = (tx > train_end) & (tx <= dev_end)
     test_mask = tx > dev_end
 
     if not train_mask.any() or not dev_mask.any() or not test_mask.any():
-        raise ValueError("Time split produced empty partitions; adjust train_end/dev_end in config.")
+        if split_cfg.get("fallback", "random") == "random":
+            warnings.warn(
+                "Time-based split produced empty partitions; falling back to stratified random split.",
+                UserWarning,
+            )
+            X = df.drop(columns=[target_col])
+            y = df[target_col].astype(int)
+            return split_data(X, y, {"split": {"random_state": split_cfg.get("random_state", 42)}})
+        raise ValueError(
+            f"Time split produced empty partitions using date_col={date_col}; "
+            "adjust train_end/dev_end in config."
+        )
 
-    X_train, y_train = X[train_mask], y[train_mask]
-    X_dev, y_dev = X[dev_mask], y[dev_mask]
-    X_test, y_test = X[test_mask], y[test_mask]
+    train_df = df.loc[train_mask].copy()
+    dev_df = df.loc[dev_mask].copy()
+    test_df = df.loc[test_mask].copy()
+
+    X_train = train_df.drop(columns=[target_col])
+    y_train = train_df[target_col].astype(int)
+    X_dev = dev_df.drop(columns=[target_col])
+    y_dev = dev_df[target_col].astype(int)
+    X_test = test_df.drop(columns=[target_col])
+    y_test = test_df[target_col].astype(int)
+
     return X_train, X_dev, X_test, y_train, y_dev, y_test
 
 
@@ -223,6 +264,7 @@ def save_feature_importance_from_pipeline(pipeline: Pipeline, outpath: Path, top
     plt.savefig(outpath, dpi=150)
     plt.close()
 
+
 def save_shap_summary_from_pipeline(
     pipeline: Pipeline,
     X_sample: pd.DataFrame,
@@ -232,7 +274,6 @@ def save_shap_summary_from_pipeline(
     model = pipeline.named_steps["model"]
     preprocessor = pipeline.named_steps["preprocessor"]
 
-    # SHAP support here is focused on tree models
     if not hasattr(model, "feature_importances_"):
         return
 
@@ -246,7 +287,6 @@ def save_shap_summary_from_pipeline(
         explainer = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(X_transformed)
 
-        # binary classification sometimes returns list
         if isinstance(shap_values, list):
             shap_values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
 
@@ -280,7 +320,6 @@ def save_shap_importance_table_from_pipeline(
     except Exception:
         return
 
-    # Tree models: use SHAP TreeExplainer; linear models: fall back to coefficient magnitude
     if hasattr(model, "feature_importances_"):
         try:
             explainer = shap.TreeExplainer(model)
@@ -362,6 +401,85 @@ def log_eval_artifacts(
     return report
 
 
+def build_dataset_objects(cfg: Dict):
+    data_cfg = cfg["data"]
+    dataset_type = data_cfg.get("dataset_type", "telco").lower()
+    sample_frac = data_cfg.get("sample_frac")
+    max_rows = data_cfg.get("max_rows")
+    rng = data_cfg.get("sample_random_state", cfg["split"].get("random_state", 42))
+
+    if dataset_type == "kkbox":
+        feature_path = data_cfg.get("feature_path")
+        if not feature_path:
+            raise ValueError("For dataset_type='kkbox', config must include data.feature_path")
+
+        raw_df = read_table(feature_path)
+        if sample_frac:
+            raw_df = raw_df.sample(frac=float(sample_frac), random_state=rng)
+        if max_rows:
+            raw_df = raw_df.head(int(max_rows))
+
+        target_col = data_cfg.get("target_col", "is_churn")
+        if target_col not in raw_df.columns:
+            raise ValueError(f"Target column '{target_col}' not found in KKBox feature table")
+
+        split_strategy = cfg["split"].get("strategy", "time")
+        if split_strategy == "time":
+            X_train_raw, X_dev_raw, X_test_raw, y_train, y_dev, y_test = time_based_split_df(
+                raw_df,
+                cfg,
+                target_col=target_col,
+            )
+
+            train_df = X_train_raw.copy()
+            train_df[target_col] = y_train.values
+            dev_df = X_dev_raw.copy()
+            dev_df[target_col] = y_dev.values
+            test_df = X_test_raw.copy()
+            test_df[target_col] = y_test.values
+
+            train_artifacts = build_kkbox_feature_frame(train_df, target_col=target_col)
+            dev_artifacts = build_kkbox_feature_frame(dev_df, target_col=target_col)
+            test_artifacts = build_kkbox_feature_frame(test_df, target_col=target_col)
+
+            X_train, y_train = train_artifacts.X, train_artifacts.y
+            X_dev, y_dev = dev_artifacts.X, dev_artifacts.y
+            X_test, y_test = test_artifacts.X, test_artifacts.y
+
+            feature_artifacts = train_artifacts
+        else:
+            feature_artifacts = build_kkbox_feature_frame(raw_df, target_col=target_col)
+            X, y = feature_artifacts.X, feature_artifacts.y
+            X_train, X_dev, X_test, y_train, y_dev, y_test = split_data(X, y, cfg)
+
+        preprocessor = make_kkbox_preprocessor(
+            feature_artifacts.numeric_cols,
+            feature_artifacts.categorical_cols,
+        )
+        data_source = str(feature_path)
+
+    else:
+        raw_path = data_cfg.get("raw_path")
+        if not raw_path:
+            raise ValueError("For non-KKBox datasets, config must include data.raw_path")
+
+        raw_df = read_table(raw_path)
+        if sample_frac:
+            raw_df = raw_df.sample(frac=float(sample_frac), random_state=rng)
+        if max_rows:
+            raw_df = raw_df.head(int(max_rows))
+        feature_artifacts = build_feature_frame(raw_df)
+        X, y = feature_artifacts.X, feature_artifacts.y
+        X_train, X_dev, X_test, y_train, y_dev, y_test = split_data(X, y, cfg)
+        preprocessor = make_preprocessor(
+            feature_artifacts.numeric_cols,
+            feature_artifacts.categorical_cols,
+        )
+        data_source = str(raw_path)
+
+    return dataset_type, data_source, feature_artifacts, preprocessor, X_train, X_dev, X_test, y_train, y_dev, y_test
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
@@ -371,24 +489,21 @@ def main() -> None:
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name)
 
-    data_path = cfg["data"]["raw_path"]
-    dataset_type = cfg["data"].get("dataset_type", "telco")
     artifact_dir = ensure_dir(cfg["artifacts"]["dir"])
     figure_dir = ensure_dir(artifact_dir / "figures")
 
-    raw_df = pd.read_csv(data_path)
-
-    if dataset_type == "kkbox":
-        feature_artifacts = build_kkbox_feature_frame(raw_df)
-        preprocessor = make_kkbox_preprocessor(feature_artifacts.numeric_cols, feature_artifacts.categorical_cols)
-        X_split = time_based_split
-    else:
-        feature_artifacts = build_feature_frame(raw_df)
-        preprocessor = make_preprocessor(feature_artifacts.numeric_cols, feature_artifacts.categorical_cols)
-        X_split = split_data
-
-    X, y = feature_artifacts.X, feature_artifacts.y
-    X_train, X_dev, X_test, y_train, y_dev, y_test = X_split(X, y, cfg)
+    (
+        dataset_type,
+        data_source,
+        feature_artifacts,
+        preprocessor,
+        X_train,
+        X_dev,
+        X_test,
+        y_train,
+        y_dev,
+        y_test,
+    ) = build_dataset_objects(cfg)
 
     class_ratio = float((y_train == 0).sum() / max((y_train == 1).sum(), 1))
 
@@ -413,13 +528,32 @@ def main() -> None:
             random_state=cfg["split"].get("random_state", 42),
         )
 
+    if LGBM_AVAILABLE:
+        candidate_models["lightgbm"] = LGBMClassifier(
+            objective="binary",
+            n_estimators=cfg["models"]["lightgbm"].get("n_estimators", 400),
+            learning_rate=cfg["models"]["lightgbm"].get("learning_rate", 0.05),
+            max_depth=cfg["models"]["lightgbm"].get("max_depth", -1),
+            num_leaves=cfg["models"]["lightgbm"].get("num_leaves", 31),
+            subsample=cfg["models"]["lightgbm"].get("subsample", 0.9),
+            colsample_bytree=cfg["models"]["lightgbm"].get("colsample_bytree", 0.9),
+            reg_lambda=cfg["models"]["lightgbm"].get("reg_lambda", 1.0),
+            min_child_samples=cfg["models"]["lightgbm"].get("min_child_samples", 20),
+            class_weight={0: 1.0, 1: class_ratio},
+            random_state=cfg["split"].get("random_state", 42),
+            verbose=-1,
+        )
+
     results = []
     pipelines = {}
 
     with mlflow.start_run(run_name=f"train-champion-{dataset_type}"):
         mlflow.log_params(
             {
-                "data_path": data_path,
+                "dataset_type": dataset_type,
+                "data_source": data_source,
+                "split_strategy": cfg["split"].get("strategy"),
+                "split_date_col": cfg["split"].get("date_col"),
                 **({} if "train_size" not in cfg["split"] else {"train_size": cfg["split"]["train_size"]}),
                 **({} if "dev_size" not in cfg["split"] else {"dev_size": cfg["split"]["dev_size"]}),
                 **({} if "random_state" not in cfg["split"] else {"random_state": cfg["split"]["random_state"]}),
@@ -500,13 +634,15 @@ def main() -> None:
             "threshold": champion_threshold,
             "numeric_cols": feature_artifacts.numeric_cols,
             "categorical_cols": feature_artifacts.categorical_cols,
-            "feature_columns": list(X.columns),
+            "feature_columns": list(X_train.columns),
             "test_metrics": test_metrics,
             "dataset_type": dataset_type,
+            "data_source": data_source,
             "time_split": (
                 {
                     "train_end": cfg["split"]["train_end"],
                     "dev_end": cfg["split"]["dev_end"],
+                    "date_col": cfg["split"].get("date_col"),
                 }
                 if "train_end" in cfg["split"]
                 else None
@@ -515,7 +651,7 @@ def main() -> None:
 
         joblib.dump(champion_pipeline, artifact_dir / "model.pkl")
         with open(artifact_dir / "model_metadata.json", "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2)
+            json.dump(metadata, f, indent=2, default=str)
 
         sample_input = X_test.head(20)
         sample_output = champion_pipeline.predict_proba(sample_input)[:, 1]
@@ -526,6 +662,7 @@ def main() -> None:
         mlflow.log_artifact(str(artifact_dir / "metrics.json"))
         mlflow.log_artifact(str(artifact_dir / "model_metadata.json"))
         mlflow.set_tag("champion_model", champion_name)
+        mlflow.set_tag("dataset_type", dataset_type)
 
         print("Champion:", champion_name)
         print("Test metrics:", json.dumps(test_metrics, indent=2))

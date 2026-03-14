@@ -22,7 +22,15 @@ except Exception as e:
     print(f"XGBoost unavailable: {e}")
     XGBOOST_AVAILABLE = False
 
+try:
+    from lightgbm import LGBMClassifier
+
+    LGBM_AVAILABLE = True
+except Exception as e:
+    print(f"LightGBM unavailable: {e}")
+    LGBM_AVAILABLE = False
 from src.features import build_feature_frame, make_preprocessor
+from src.kkbox_features import build_kkbox_feature_frame, make_kkbox_preprocessor
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,6 +77,28 @@ def split_data(X, y, cfg: Dict):
     return X_train, X_dev, X_test, y_train, y_dev, y_test
 
 
+def time_based_split(X, y, cfg: Dict):
+    train_end = pd.to_datetime(cfg["split"]["train_end"])
+    dev_end = pd.to_datetime(cfg["split"]["dev_end"])
+
+    if "transaction_date" not in X.columns:
+        raise ValueError("transaction_date column required for time-based split.")
+
+    tx = pd.to_datetime(X["transaction_date"], errors="coerce")
+
+    train_mask = tx <= train_end
+    dev_mask = (tx > train_end) & (tx <= dev_end)
+    test_mask = tx > dev_end
+
+    if not train_mask.any() or not dev_mask.any() or not test_mask.any():
+        raise ValueError("Time split produced empty partitions; adjust train_end/dev_end in config.")
+
+    X_train, y_train = X[train_mask], y[train_mask]
+    X_dev, y_dev = X[dev_mask], y[dev_mask]
+    X_test, y_test = X[test_mask], y[test_mask]
+    return X_train, X_dev, X_test, y_train, y_dev, y_test
+
+
 def choose_threshold(y_true, y_score):
     precision, recall, thresholds = precision_recall_curve(y_true, y_score)
     if len(thresholds) == 0:
@@ -79,8 +109,8 @@ def choose_threshold(y_true, y_score):
 
 
 def main() -> None:
-    if not XGBOOST_AVAILABLE:
-        raise RuntimeError("XGBoost is not available, so tuning cannot run.")
+    if not (XGBOOST_AVAILABLE or LGBM_AVAILABLE):
+        raise RuntimeError("Neither XGBoost nor LightGBM is available, so tuning cannot run.")
 
     args = parse_args()
     cfg = load_config(args.config)
@@ -95,33 +125,66 @@ def main() -> None:
     tune_dir = ensure_dir(artifact_dir / "tuning")
 
     raw_df = pd.read_csv(data_path)
-    feature_artifacts = build_feature_frame(raw_df)
+    dataset_type = cfg["data"].get("dataset_type", "telco")
+    target_col = cfg["data"].get("target_col", "Churn" if dataset_type == "telco" else "is_churn")
+
+    if dataset_type == "kkbox":
+        feature_artifacts = build_kkbox_feature_frame(raw_df, target_col=target_col)
+        splitter = time_based_split
+        preprocessor_fn = make_kkbox_preprocessor
+    else:
+        feature_artifacts = build_feature_frame(raw_df)
+        splitter = split_data
+        preprocessor_fn = make_preprocessor
+
     X, y = feature_artifacts.X, feature_artifacts.y
 
-    X_train, X_dev, X_test, y_train, y_dev, y_test = split_data(X, y, cfg)
+    X_train, X_dev, X_test, y_train, y_dev, y_test = splitter(X, y, cfg)
     class_ratio = float((y_train == 0).sum() / max((y_train == 1).sum(), 1))
 
     tuning_cfg = cfg.get("tuning", {})
     n_trials = int(tuning_cfg.get("n_trials", 30))
     objective_metric = tuning_cfg.get("objective_metric", "roc_auc")
+    algorithm = tuning_cfg.get("algorithm", "xgboost")
+    if algorithm not in ("xgboost", "lightgbm"):
+        raise ValueError("tuning.algorithm must be one of ['xgboost', 'lightgbm']")
+    if algorithm == "xgboost" and not XGBOOST_AVAILABLE:
+        raise RuntimeError("XGBoost not available but tuning.algorithm is xgboost")
+    if algorithm == "lightgbm" and not LGBM_AVAILABLE:
+        raise RuntimeError("LightGBM not available but tuning.algorithm is lightgbm")
 
     def objective(trial: optuna.Trial) -> float:
-        preprocessor = make_preprocessor(feature_artifacts.numeric_cols, feature_artifacts.categorical_cols)
+        preprocessor = preprocessor_fn(feature_artifacts.numeric_cols, feature_artifacts.categorical_cols)
 
-        estimator = XGBClassifier(
-            objective="binary:logistic",
-            eval_metric="auc",
-            random_state=cfg["split"]["random_state"],
-            n_estimators=trial.suggest_int("n_estimators", 100, 800),
-            max_depth=trial.suggest_int("max_depth", 3, 10),
-            learning_rate=trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-            subsample=trial.suggest_float("subsample", 0.6, 1.0),
-            colsample_bytree=trial.suggest_float("colsample_bytree", 0.6, 1.0),
-            min_child_weight=trial.suggest_int("min_child_weight", 1, 12),
-            reg_lambda=trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
-            gamma=trial.suggest_float("gamma", 0.0, 5.0),
-            scale_pos_weight=trial.suggest_float("scale_pos_weight", max(0.5, class_ratio * 0.5), class_ratio * 2.0),
-        )
+        if algorithm == "xgboost":
+            estimator = XGBClassifier(
+                objective="binary:logistic",
+                eval_metric="auc",
+                random_state=cfg["split"]["random_state"],
+                n_estimators=trial.suggest_int("n_estimators", 100, 800),
+                max_depth=trial.suggest_int("max_depth", 3, 10),
+                learning_rate=trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                subsample=trial.suggest_float("subsample", 0.6, 1.0),
+                colsample_bytree=trial.suggest_float("colsample_bytree", 0.6, 1.0),
+                min_child_weight=trial.suggest_int("min_child_weight", 1, 12),
+                reg_lambda=trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
+                gamma=trial.suggest_float("gamma", 0.0, 5.0),
+                scale_pos_weight=trial.suggest_float("scale_pos_weight", max(0.5, class_ratio * 0.5), class_ratio * 2.0),
+            )
+        else:
+            estimator = LGBMClassifier(
+                objective="binary",
+                n_estimators=trial.suggest_int("n_estimators", 100, 800),
+                max_depth=trial.suggest_int("max_depth", -1, 12),
+                num_leaves=trial.suggest_int("num_leaves", 16, 128),
+                learning_rate=trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                subsample=trial.suggest_float("subsample", 0.6, 1.0),
+                colsample_bytree=trial.suggest_float("colsample_bytree", 0.6, 1.0),
+                reg_lambda=trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
+                min_child_samples=trial.suggest_int("min_child_samples", 10, 100),
+                class_weight={0: 1.0, 1: class_ratio},
+                random_state=cfg["split"]["random_state"],
+            )
 
         pipeline = Pipeline(
             [

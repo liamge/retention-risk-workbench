@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *.pyo
 
+# Data
+data/
+
 # environments
 .venv/
 venv/
@@ -23,3 +26,6 @@ data/predictions/
 
 # Streamlit cache
 .streamlit/
+
+# Pytest cache
+.pytest_cache/
