@@ -71,5 +71,3 @@ A typical GitHub Actions pipeline:
 ## 9) Backup / recovery
 - Model artifacts stored in object storage (S3/GCS/Azure Blob) with lifecycle policies.
 - MLflow backend DB should have backups (RDS/CloudSQL) and PITR enabled.
-
-Use these artifacts as conversation starters in interviews or PRs: they show end-to-end thinking without locking you into a specific cloud. Do **not** expose them to production traffic without proper hardening and governance.

@@ -222,26 +222,31 @@ pip install pandas numpy scikit-learn shap streamlit plotly joblib
 
 ## Train the model
 
+### Telco (default)
 ```
-python agent_churn_dashboard_starter.py
+python -m src.train --config configs/base.yaml
 ```
 
-This will:
+### KKBox (random split by default)
+```
+python -m src.train --config configs/kkbox.yaml
+```
 
-* train the model
-* score customers
-* export metrics and explanations
-* generate dashboard assets
+What this does:
+
+* trains candidate models (logistic + optional XGBoost/LightGBM) and picks a champion
+* logs metrics/artifacts to MLflow (SQLite at `mlruns/mlflow.db` by default)
+* writes model artifacts to `artifacts/` (telco) or `artifacts/kkbox/`
 
 ---
 
 ## Launch the dashboard
 
 ```
-streamlit run app.py
+streamlit run dashboard/app.py
 ```
 
-The dashboard will open in your browser.
+Use the sidebar to pick which artifact set to view (e.g., `artifacts/` for telco, `artifacts/kkbox/` for KKBox). The dashboard reads matching prediction files from `data/predictions/` (or `data/predictions/kkbox/`).
 
 ---
 
@@ -271,6 +276,19 @@ These metrics help detect:
 * model drift
 * population changes
 * scoring anomalies
+
+### MLflow UI
+
+```
+mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db --default-artifact-root ./mlruns
+```
+
+Or run the compose stack (includes MLflow at http://localhost:5050) from `infra/`:
+
+```
+cd infra
+docker compose up --build
+```
 
 ---
 
