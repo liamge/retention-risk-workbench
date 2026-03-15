@@ -1,4 +1,4 @@
-from src.predict import assign_risk_tier, recommended_action
+from src.cli.predict import assign_risk_tier, recommended_action
 
 
 def test_assign_risk_tier_respects_threshold():

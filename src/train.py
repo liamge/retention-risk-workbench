@@ -1,6 +1,10 @@
-from __future__ import annotations
+"""Compatibility shim for legacy imports.
 
-from src.training.run import main
+CLI lives in src.cli.train; keep this module so existing imports keep working.
+"""
+
+from src.cli.train import main  # noqa: F401
+
 
 if __name__ == "__main__":
     main()

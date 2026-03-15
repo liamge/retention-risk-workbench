@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Tuple
-
-import pandas as pd
+from typing import Dict
 
 from src.features import build_feature_frame, make_preprocessor
 from src.kkbox_features import build_kkbox_feature_frame, make_kkbox_preprocessor
@@ -14,6 +12,9 @@ def build_dataset_objects(cfg: Dict):
     """
     Load data, apply feature engineering, and produce train/dev/test splits plus preprocessors.
     Returns (dataset_type, data_source, id_col, feature_artifacts, preprocessor, X_train, X_dev, X_test, y_train, y_dev, y_test).
+
+    The returned preprocessor is an unfitted template configured with the feature columns; clone it
+    when you need fresh instances for multiple pipelines (e.g., across Optuna trials).
     """
     data_cfg = cfg["data"]
     dataset_type = data_cfg.get("dataset_type", "telco").lower()

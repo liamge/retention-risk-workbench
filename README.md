@@ -233,12 +233,12 @@ pip install pandas numpy scikit-learn shap streamlit plotly joblib
 
 ### Telco (default)
 ```
-python -m src.train --config configs/base.yaml
+python -m src.cli.train --config configs/base.yaml
 ```
 
 ### KKBox (random split by default)
 ```
-python -m src.train --config configs/kkbox.yaml
+python -m src.cli.train --config configs/kkbox.yaml
 ```
 
 What this does:
@@ -298,6 +298,21 @@ Or run the compose stack (includes MLflow at http://localhost:5050) from `infra/
 cd infra
 docker compose up --build
 ```
+
+---
+
+# Quality Checks (Lightweight)
+
+Run a quick guardrail before commits to catch junk files and obvious Python issues:
+
+1. Install dev-only tooling: `pip install -r requirements-dev.txt`
+2. Execute: `./scripts/quality_gate.sh`
+
+What the gate covers:
+
+* compiles `src/` and `tests/` to bytecode to surface syntax/import errors early
+* Ruff lint (`E9`, `F*`) to flag unused imports/names without reformatting the repo
+* fails if untracked junk is present (e.g., `.pyc`, `__pycache__`, `.DS_Store`, logs, coverage files, stray `mlruns/` or `artifacts/` outputs)
 
 ---
 

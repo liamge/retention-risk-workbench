@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import List
-import logging
 
-import duckdb
 import pandas as pd
 import yaml
 from sklearn.compose import ColumnTransformer
@@ -13,12 +12,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from src.features import FeatureArtifacts
-from src.kkbox.capping import (
-    CAPPED_COLUMNS,
-    CAPPED_PREFERRED_PAIRS,
-    RAW_DATE_COLUMNS,
-    add_capped_columns,
-)
+from src.kkbox.capping import CAPPED_PREFERRED_PAIRS, RAW_DATE_COLUMNS, add_capped_columns
 from src.kkbox.export import derive_split_paths, maybe_split_existing, split_for_artifacts
 from src.kkbox.sql import configure_connection, run_stage, sql_path
 from src.utils.io import ensure_dir, read_table

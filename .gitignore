@@ -27,5 +27,8 @@ data/predictions/
 # Streamlit cache
 .streamlit/
 
+# Reoirts
+reports/*
+
 # Pytest cache
 .pytest_cache/

@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.evaluate import _test_split_from_saved, _validate_features
+from src.cli.evaluate import _test_split_from_saved, _validate_features
 
 
 def test_test_split_from_saved_uses_row_ids():

@@ -43,6 +43,13 @@ def test_read_table_dispatches_by_suffix(monkeypatch, tmp_path: Path):
         read_table(txt_path)
 
 
+def test_read_table_raises_on_missing_file(tmp_path: Path):
+    missing = tmp_path / "missing.csv"
+
+    with pytest.raises(FileNotFoundError):
+        read_table(missing)
+
+
 def test_random_three_way_split_respects_proportions():
     X = pd.DataFrame({"a": range(10)})
     y = pd.Series([0, 1] * 5)
@@ -56,6 +63,19 @@ def test_random_three_way_split_respects_proportions():
     assert len(X_test) == 2
     # stratification preserves class balance roughly
     assert y_train.sum() == 3
+
+
+def test_random_three_way_split_is_deterministic():
+    X = pd.DataFrame({"a": range(20)})
+    y = pd.Series([0, 1] * 10)
+
+    splits_first = random_three_way_split(X, y, random_state=99, dev_size=0.2, test_size=0.2)
+    splits_second = random_three_way_split(X, y, random_state=99, dev_size=0.2, test_size=0.2)
+
+    for first, second in zip(splits_first[:3], splits_second[:3]):
+        pd.testing.assert_frame_equal(first, second)
+    for first, second in zip(splits_first[3:], splits_second[3:]):
+        pd.testing.assert_series_equal(first, second)
 
 
 def test_time_based_split_orders_by_dates():
@@ -95,10 +115,44 @@ def test_choose_threshold_returns_best_f1():
         choose_threshold(y_true, y_proba, metric="roc_auc")
 
 
+def test_choose_threshold_is_reproducible_on_ties():
+    y_true = np.array([0, 1])
+    y_proba = np.array([0.6, 0.6])
+
+    t1 = choose_threshold(y_true, y_proba, step=0.2)
+    t2 = choose_threshold(y_true, y_proba, step=0.2)
+
+    assert t1 == pytest.approx(t2)
+
+
 def test_map_feature_to_theme_matches_keywords():
-    assert map_feature_to_theme("login_count") == "engagement"
-    assert map_feature_to_theme("policy_status") == "production"
-    assert map_feature_to_theme("months_since_signup") == "tenure"
-    assert map_feature_to_theme("churn_probability") == "retention_risk"
-    assert map_feature_to_theme("customer_state") == "profile"
-    assert map_feature_to_theme("unknown_feature") == "other"
+    # KKBox-style engineered features
+    assert map_feature_to_theme("total_secs_sum") == "Engagement & Listening"
+    assert map_feature_to_theme("payment_plan_days") == "Subscription & Billing"
+    assert map_feature_to_theme("membership_expire_date") == "Renewal & Expiry"
+    # Telco-style features
+    assert map_feature_to_theme("MonthlyCharges") == "Pricing & Value"
+    assert map_feature_to_theme("TechSupport") == "Support & Protection"
+    assert map_feature_to_theme("Contract") == "Billing & Contract"
+    # Generic fallbacks
+    assert map_feature_to_theme("login_count") == "Engagement & Usage"
+    assert map_feature_to_theme("churn_probability") == "Retention Risk"
+    assert map_feature_to_theme("customer_state") == "Customer Profile"
+    assert map_feature_to_theme("unknown_feature") == "Other"
+
+
+def test_map_feature_to_theme_is_case_insensitive():
+    assert map_feature_to_theme("MONTHLYCHARGES") == "Pricing & Value"
+
+
+def test_map_feature_to_theme_telco_kkbox_and_agent_revenue_examples():
+    # Telco-style signals
+    assert map_feature_to_theme("paperlessbilling_flag") == "Billing & Contract"
+    assert map_feature_to_theme("tenure_group_bucket") == "Customer Lifecycle"
+    # KKBox / subscription signals
+    assert map_feature_to_theme("auto_renew_flag") == "Subscription & Billing"
+    assert map_feature_to_theme("payment_method_credit") == "Subscription & Billing"
+    assert map_feature_to_theme("latest_transaction_date") == "Recency & Activity"
+    # Agent / revenue-oriented features
+    assert map_feature_to_theme("agent_channel") == "Customer Profile"
+    assert map_feature_to_theme("monthly_revenue") == "Pricing & Value"

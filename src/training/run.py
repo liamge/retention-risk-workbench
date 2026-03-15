@@ -10,7 +10,6 @@ from typing import Dict, Tuple
 
 import mlflow
 import mlflow.sklearn
-import numpy as np
 import pandas as pd
 from mlflow.models import infer_signature
 from sklearn.metrics import f1_score
