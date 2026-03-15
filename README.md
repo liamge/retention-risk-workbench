@@ -59,6 +59,15 @@ Monitoring + reporting
 
 ---
 
+# Reproducible Evaluation & Splits
+
+- Training now writes deterministic split artifacts to `artifacts/splits/`, including `test_ids.parquet` / `.csv` (stable row IDs) and `test_set.parquet` / `.csv` (full labeled slice).
+- Evaluation automatically prefers those saved splits; if they are missing, it warns and falls back to recomputing from the split config.
+- Split alignment uses stable IDs (e.g., `customerID` or `msno`) when present, and it validates feature columns and split parameters against the training metadata before scoring.
+- All entrypoints load data via `src/utils/io.read_table`, so CSV and Parquet inputs are both supported.
+
+---
+
 # Repository Structure
 
 ```

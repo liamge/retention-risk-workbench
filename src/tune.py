@@ -2,24 +2,25 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import sys
 from pathlib import Path
-from typing import Dict
 
 import mlflow
 import numpy as np
 import optuna
 import pandas as pd
-import yaml
-from sklearn.metrics import average_precision_score, f1_score, precision_recall_curve, roc_auc_score
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 from sklearn.pipeline import Pipeline
+
+logger = logging.getLogger(__name__)
 
 try:
     from xgboost import XGBClassifier
 
     XGBOOST_AVAILABLE = True
 except Exception as e:
-    print(f"XGBoost unavailable: {e}")
+    logger.warning("XGBoost unavailable: %s", e)
     XGBOOST_AVAILABLE = False
 
 try:
@@ -27,10 +28,18 @@ try:
 
     LGBM_AVAILABLE = True
 except Exception as e:
-    print(f"LightGBM unavailable: {e}")
+    logger.warning("LightGBM unavailable: %s", e)
     LGBM_AVAILABLE = False
+# Ensure repository root is on sys.path when running as a script
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from src.features import build_feature_frame, make_preprocessor
 from src.kkbox_features import build_kkbox_feature_frame, make_kkbox_preprocessor
+from src.utils.io import ensure_dir, load_config, read_table
+from src.utils.metrics import choose_threshold
+from src.utils.splits import split_data
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,80 +48,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_config(path: str) -> Dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def ensure_dir(path: str | Path) -> Path:
-    path = Path(path)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def split_data(X, y, cfg: Dict):
-    random_state = cfg["split"]["random_state"]
-    train_size = cfg["split"].get("train_size", 0.70)
-    dev_size = cfg["split"].get("dev_size", 0.15)
-    test_size = 1.0 - train_size - dev_size
-    if test_size <= 0:
-        raise ValueError("train_size + dev_size must be less than 1.0")
-
-    X_train, X_temp, y_train, y_temp = train_test_split(
-        X,
-        y,
-        test_size=(1.0 - train_size),
-        stratify=y,
-        random_state=random_state,
-    )
-
-    relative_test = test_size / (dev_size + test_size)
-    X_dev, X_test, y_dev, y_test = train_test_split(
-        X_temp,
-        y_temp,
-        test_size=relative_test,
-        stratify=y_temp,
-        random_state=random_state,
-    )
-    return X_train, X_dev, X_test, y_train, y_dev, y_test
-
-
-def time_based_split(X, y, cfg: Dict):
-    train_end = pd.to_datetime(cfg["split"]["train_end"])
-    dev_end = pd.to_datetime(cfg["split"]["dev_end"])
-
-    if "transaction_date" not in X.columns:
-        raise ValueError("transaction_date column required for time-based split.")
-
-    tx = pd.to_datetime(X["transaction_date"], errors="coerce")
-
-    train_mask = tx <= train_end
-    dev_mask = (tx > train_end) & (tx <= dev_end)
-    test_mask = tx > dev_end
-
-    if not train_mask.any() or not dev_mask.any() or not test_mask.any():
-        raise ValueError("Time split produced empty partitions; adjust train_end/dev_end in config.")
-
-    X_train, y_train = X[train_mask], y[train_mask]
-    X_dev, y_dev = X[dev_mask], y[dev_mask]
-    X_test, y_test = X[test_mask], y[test_mask]
-    return X_train, X_dev, X_test, y_train, y_dev, y_test
-
-
-def choose_threshold(y_true, y_score):
-    precision, recall, thresholds = precision_recall_curve(y_true, y_score)
-    if len(thresholds) == 0:
-        return 0.5
-    f1_scores = 2 * (precision[:-1] * recall[:-1]) / np.clip(precision[:-1] + recall[:-1], 1e-9, None)
-    best_idx = int(np.nanargmax(f1_scores))
-    return float(thresholds[best_idx])
-
-
-def main() -> None:
+def main(args: argparse.Namespace | None = None) -> int:
     if not (XGBOOST_AVAILABLE or LGBM_AVAILABLE):
         raise RuntimeError("Neither XGBoost nor LightGBM is available, so tuning cannot run.")
 
-    args = parse_args()
+    args = args or parse_args()
     cfg = load_config(args.config)
 
     tracking_uri = cfg.get("mlflow", {}).get("tracking_uri", "file:./mlruns")
@@ -120,26 +60,93 @@ def main() -> None:
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name)
 
-    data_path = cfg["data"]["raw_path"]
+    data_cfg = cfg["data"]
+    data_path = data_cfg.get("raw_path") or data_cfg.get("feature_path")
+    if not data_path:
+        raise KeyError("Config is missing data.raw_path (or data.feature_path for KKBox).")
+
+    dataset_type = cfg["data"].get("dataset_type", "telco").lower()
+    split_cfg = cfg["split"]
+    train_size = split_cfg.get("train_size")
+    dev_size = split_cfg.get("dev_size")
+    test_size = split_cfg.get("test_size")
+    random_state = split_cfg.get("random_state", 42)
+    split_strategy = split_cfg.get("strategy", "time" if dataset_type == "kkbox" else "random")
+    fallback_strategy = split_cfg.get("fallback")
+    date_col_default = "latest_transaction_date" if dataset_type == "kkbox" else "transaction_date"
+    date_col = split_cfg.get("date_col", date_col_default)
+
     artifact_dir = ensure_dir(cfg["artifacts"]["dir"])
     tune_dir = ensure_dir(artifact_dir / "tuning")
 
-    raw_df = pd.read_csv(data_path)
-    dataset_type = cfg["data"].get("dataset_type", "telco")
+    raw_df = read_table(data_path)
     target_col = cfg["data"].get("target_col", "Churn" if dataset_type == "telco" else "is_churn")
 
     if dataset_type == "kkbox":
-        feature_artifacts = build_kkbox_feature_frame(raw_df, target_col=target_col)
-        splitter = time_based_split
         preprocessor_fn = make_kkbox_preprocessor
+        if split_strategy == "time":
+            X_raw = raw_df.drop(columns=[target_col])
+            y_raw = raw_df[target_col].astype(int)
+            X_train_raw, X_dev_raw, X_test_raw, y_train, y_dev, y_test = split_data(
+                X_raw,
+                y_raw,
+                dataset_name=dataset_type,
+                split_strategy=split_strategy,
+                fallback_strategy=fallback_strategy,
+                random_state=random_state,
+                train_size=train_size,
+                dev_size=dev_size,
+                test_size=test_size,
+                date_col=date_col,
+                train_end=split_cfg.get("train_end"),
+                dev_end=split_cfg.get("dev_end"),
+            )
+
+            train_df = X_train_raw.copy()
+            train_df[target_col] = y_train.values
+            dev_df = X_dev_raw.copy()
+            dev_df[target_col] = y_dev.values
+            test_df = X_test_raw.copy()
+            test_df[target_col] = y_test.values
+
+            train_artifacts = build_kkbox_feature_frame(train_df, target_col=target_col)
+            dev_artifacts = build_kkbox_feature_frame(dev_df, target_col=target_col)
+            test_artifacts = build_kkbox_feature_frame(test_df, target_col=target_col)
+
+            X_train, y_train = train_artifacts.X, train_artifacts.y
+            X_dev, y_dev = dev_artifacts.X, dev_artifacts.y
+            X_test, y_test = test_artifacts.X, test_artifacts.y
+
+            feature_artifacts = train_artifacts
+        else:
+            feature_artifacts = build_kkbox_feature_frame(raw_df, target_col=target_col)
+            X, y = feature_artifacts.X, feature_artifacts.y
+            X_train, X_dev, X_test, y_train, y_dev, y_test = split_data(
+                X,
+                y,
+                dataset_name=dataset_type,
+                split_strategy=split_strategy,
+                fallback_strategy=fallback_strategy,
+                random_state=random_state,
+                train_size=train_size,
+                dev_size=dev_size,
+                test_size=test_size,
+            )
     else:
         feature_artifacts = build_feature_frame(raw_df)
-        splitter = split_data
         preprocessor_fn = make_preprocessor
-
-    X, y = feature_artifacts.X, feature_artifacts.y
-
-    X_train, X_dev, X_test, y_train, y_dev, y_test = splitter(X, y, cfg)
+        X, y = feature_artifacts.X, feature_artifacts.y
+        X_train, X_dev, X_test, y_train, y_dev, y_test = split_data(
+            X,
+            y,
+            dataset_name=dataset_type,
+            split_strategy=split_strategy,
+            fallback_strategy=fallback_strategy,
+            random_state=random_state,
+            train_size=train_size,
+            dev_size=dev_size,
+            test_size=test_size,
+        )
     class_ratio = float((y_train == 0).sum() / max((y_train == 1).sum(), 1))
 
     tuning_cfg = cfg.get("tuning", {})
@@ -223,10 +230,14 @@ def main() -> None:
             return pr_auc
         return roc_auc
 
-    with mlflow.start_run(run_name="tune-xgboost"):
+    run_name = f"tune-{algorithm}"
+    best_params_filename = f"best_{algorithm}_params.json"
+
+    with mlflow.start_run(run_name=run_name):
         mlflow.log_param("data_path", data_path)
         mlflow.log_param("n_trials", n_trials)
         mlflow.log_param("objective_metric", objective_metric)
+        mlflow.log_param("algorithm", algorithm)
 
         study = optuna.create_study(direction="maximize")
         study.optimize(objective, n_trials=n_trials)
@@ -245,7 +256,8 @@ def main() -> None:
         trials_df = study.trials_dataframe()
         trials_df.to_csv(tune_dir / "optuna_trials.csv", index=False)
 
-        with open(tune_dir / "best_xgboost_params.json", "w", encoding="utf-8") as f:
+        best_params_path = tune_dir / best_params_filename
+        with open(best_params_path, "w", encoding="utf-8") as f:
             json.dump(best, f, indent=2)
 
         mlflow.log_metric("best_value", float(study.best_value))
@@ -253,11 +265,18 @@ def main() -> None:
             mlflow.log_param(f"best_{key}", value)
 
         mlflow.log_artifact(str(tune_dir / "optuna_trials.csv"))
-        mlflow.log_artifact(str(tune_dir / "best_xgboost_params.json"))
+        mlflow.log_artifact(str(best_params_path))
 
-        print(json.dumps(best, indent=2))
-        print(f"Saved tuning outputs to {tune_dir.resolve()}")
+        logger.info("Best trial summary:\n%s", json.dumps(best, indent=2))
+        logger.info("Saved tuning outputs to %s", tune_dir.resolve())
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+    try:
+        sys.exit(main())
+    except Exception:
+        logger.exception("Tuning run failed.")
+        sys.exit(1)

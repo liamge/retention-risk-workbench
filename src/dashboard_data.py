@@ -6,6 +6,7 @@ from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
+from src.utils.io import read_table
 
 
 def _map_feature_to_theme(feature_name: str) -> str:
@@ -57,7 +58,7 @@ def _safe_read_json(path: Path) -> Dict:
 
 def _safe_read_csv(path: Path) -> pd.DataFrame:
     if path.exists():
-        return pd.read_csv(path)
+        return read_table(path)
     return pd.DataFrame()
 
 
@@ -98,7 +99,7 @@ def load_latest_predictions(prediction_dir: Path) -> Optional[pd.DataFrame]:
     if not csvs:
         return None
 
-    return pd.read_csv(csvs[0])
+    return read_table(csvs[0])
 
 
 def summarize_technical_view(metrics: Dict, metadata: Dict) -> Dict:

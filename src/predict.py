@@ -2,23 +2,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
-import yaml
+
+logger = logging.getLogger(__name__)
 
 try:
     import shap
     SHAP_AVAILABLE = True
 except Exception as e:
-    print(f"SHAP unavailable: {e}")
+    logger.warning("SHAP unavailable: %s", e)
     SHAP_AVAILABLE = False
 
 from src.features import build_feature_frame
 from src.kkbox_features import build_kkbox_feature_frame
+from src.utils.io import ensure_dir, load_config, read_table
+from src.utils.themes import map_feature_to_theme
 
 
 def parse_args():
@@ -26,23 +31,6 @@ def parse_args():
     parser.add_argument("--config", type=str, default="configs/base.yaml")
     parser.add_argument("--input", type=str, required=True)
     return parser.parse_args()
-
-
-def load_config(path: str):
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def read_table(path: str | Path) -> pd.DataFrame:
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Input data file not found: {path}")
-    suffix = path.suffix.lower()
-    if suffix == ".csv":
-        return pd.read_csv(path)
-    if suffix in {".parquet", ".pq"}:
-        return pd.read_parquet(path)
-    raise ValueError(f"Unsupported input file type for {path}. Use CSV or Parquet.")
 
 
 def estimate_monthly_value(row: pd.Series) -> float:
@@ -83,46 +71,6 @@ def recommended_action(prob: float, threshold: float) -> str:
     if prob >= 0.33:
         return "Monitor and light-touch engagement"
     return "No intervention needed"
-
-
-def map_feature_to_theme(feature_name: str) -> str:
-    """Group feature names into business-friendly themes (supports KKBox + Telco)."""
-    name = feature_name.lower()
-
-    # KKBox engagement & listening behavior
-    if any(k in name for k in ["songs_played", "total_secs", "completion_rate", "skip_rate", "near_completion", "quality_score", "repeat_ratio", "log_day", "secs_per_unique", "avg_song"]):
-        return "Engagement & Listening"
-    # KKBox subscription / billing / payments
-    if any(k in name for k in ["payment_method", "payment_plan", "plan_list_price", "actual_amount_paid", "amount_paid", "auto_renew", "cancel", "paid_to_list", "amount_paid_per_txn"]):
-        return "Subscription & Billing"
-    # Renewal / expiry risk
-    if any(k in name for k in ["membership_expire", "post_expiry", "early_renewal", "latest_cancel", "latest_auto_renew"]):
-        return "Renewal & Expiry"
-    # Recency of activity and transactions
-    if any(k in name for k in ["days_since_last", "latest_log", "latest_transaction", "last_log_date", "last_transaction_date"]):
-        return "Recency & Activity"
-    # Content breadth / diversity
-    if any(k in name for k in ["num_unq", "secs_per_unique"]):
-        return "Content Breadth"
-    # Customer profile & registration
-    if any(k in name for k in ["city", "age", "gender", "registered_via", "registration_init", "account_age"]):
-        return "Customer Profile"
-
-    # Telco legacy themes
-    if any(k in name for k in ["contract", "paperless", "payment", "month_to_month", "electronic_check", "auto_pay"]):
-        return "Billing & Contract"
-    if any(k in name for k in ["tenure", "customer_stage", "tenure_group"]):
-        return "Customer Lifecycle"
-    if any(k in name for k in ["monthlycharges", "totalcharges", "avg_monthly_spend", "price_ratio", "high_bill", "revenue"]):
-        return "Pricing & Value"
-    if any(k in name for k in ["techsupport", "onlinesecurity", "onlinebackup", "deviceprotection", "support"]):
-        return "Support & Protection"
-    if any(k in name for k in ["internetservice", "fiber", "streaming", "phoneservice", "multipleservices", "num_services", "service"]):
-        return "Product Usage"
-    if any(k in name for k in ["senior", "partner", "dependents", "gender"]):
-        return "Customer Profile"
-
-    return "Other"
 
 
 def build_row_level_explanations(model, df: pd.DataFrame, top_n: int = 3):
@@ -176,20 +124,19 @@ def build_row_level_explanations(model, df: pd.DataFrame, top_n: int = 3):
         return pd.DataFrame(rows, index=df.index)
 
     except Exception as e:
-        print(f"Could not build row-level explanations: {e}")
+        logger.exception("Could not build row-level explanations: %s", e)
         return pd.DataFrame(index=df.index)
 
 
-def main():
-    args = parse_args()
+def main(args: argparse.Namespace | None = None) -> int:
+    args = args or parse_args()
     cfg = load_config(args.config)
 
     artifact_dir = Path(cfg["artifacts"]["dir"])
     dataset_type = cfg["data"].get("dataset_type", "telco")
 
     # Keep telco outputs in data/predictions, route others (e.g., kkbox) to subdirectories
-    prediction_dir = Path("data/predictions") / (dataset_type if dataset_type != "telco" else "")
-    prediction_dir.mkdir(parents=True, exist_ok=True)
+    prediction_dir = ensure_dir(Path("data/predictions") / (dataset_type if dataset_type != "telco" else ""))
 
     model = joblib.load(artifact_dir / "model.pkl")
 
@@ -230,9 +177,15 @@ def main():
     out.to_csv(output_path, index=False)
     out.to_csv(latest_path, index=False)
 
-    print(f"Saved predictions to {output_path}")
-    print(f"Updated latest predictions at {latest_path}")
+    logger.info("Saved predictions to %s", output_path.resolve())
+    logger.info("Updated latest predictions at %s", latest_path.resolve())
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+    try:
+        sys.exit(main())
+    except Exception:
+        logger.exception("Prediction run failed.")
+        sys.exit(1)

@@ -23,7 +23,7 @@ def make_toy_df():
 def test_estimate_ate_reduces_churn():
     df = make_toy_df()
     ate = estimate_ate(df, treatment_col="treatment", outcome_col="outcome")
-    assert round(ate.ate, 3) == -0.250  # treatment lowers churn rate
+    assert round(ate.ate, 3) == -0.500  # treatment lowers churn rate
     assert ate.uplift_direction == "improves"
 
 

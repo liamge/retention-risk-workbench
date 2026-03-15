@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +17,9 @@ from src.causal import (
     recommend_policy,
     standardize_experiment_frame,
 )
+from src.utils.io import ensure_dir, read_table
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
@@ -93,7 +98,7 @@ def generate_causal_artifacts(df: pd.DataFrame, args: argparse.Namespace) -> dic
 
 
 def save_artifacts(bundle: dict, artifact_dir: Path) -> None:
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    ensure_dir(artifact_dir)
 
     (artifact_dir / "summary.json").write_text(json.dumps(bundle["summary"], indent=2), encoding="utf-8")
     if not bundle["cate"].empty:
@@ -102,8 +107,8 @@ def save_artifacts(bundle: dict, artifact_dir: Path) -> None:
     bundle["policy"].to_csv(artifact_dir / "policy_recommendations.csv", index=False)
 
 
-def main():
-    args = parse_args()
+def main(args: argparse.Namespace | None = None) -> int:
+    args = args or parse_args()
 
     input_path = Path(args.input)
     if not input_path.exists():
@@ -111,11 +116,18 @@ def main():
             f"Input experiment file not found at {input_path}. Provide a CSV with treatment, outcome, and optional score columns."
         )
 
-    df = pd.read_csv(input_path)
+    df = read_table(input_path)
     bundle = generate_causal_artifacts(df, args)
-    save_artifacts(bundle, Path(args.artifact_dir))
-    print(f"Saved causal artifacts to {Path(args.artifact_dir).resolve()}")
+    artifact_dir = ensure_dir(Path(args.artifact_dir))
+    save_artifacts(bundle, artifact_dir)
+    logger.info("Saved causal artifacts to %s", artifact_dir.resolve())
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+    try:
+        sys.exit(main())
+    except Exception:
+        logger.exception("Causal reporting failed.")
+        sys.exit(1)

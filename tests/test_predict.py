@@ -3,7 +3,8 @@ from src.predict import assign_risk_tier, recommended_action
 
 def test_assign_risk_tier_respects_threshold():
     assert assign_risk_tier(0.8, threshold=0.5) == "High"
-    assert assign_risk_tier(0.5, threshold=0.5) == "High"
+    assert assign_risk_tier(0.7, threshold=0.8) == "Medium"  # below max(threshold, 0.66)
+    assert assign_risk_tier(0.66, threshold=0.5) == "High"   # hits 0.66 floor for high tier
     assert assign_risk_tier(0.4, threshold=0.5) == "Medium"
     assert assign_risk_tier(0.1, threshold=0.5) == "Low"
 
