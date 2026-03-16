@@ -45,10 +45,18 @@ def read_table(path: str | Path) -> pd.DataFrame:
     else:
         raise ValueError(f"Unsupported table format: {path.suffix}")
 
-    # Normalize dtypes to avoid Arrow LargeUtf8 issues on Streamlit Cloud
-    df = df.convert_dtypes(dtype_backend="python")
+    # Normalize dtypes to avoid Arrow LargeUtf8 issues on Streamlit Cloud.
+    # Older pandas versions (e.g., on Streamlit Cloud images) do not accept
+    # dtype_backend="python"; fall back to default conversion.
+    try:
+        df = df.convert_dtypes()
+    except Exception:
+        pass
+
     for col in df.columns:
-        if isinstance(df[col].dtype, pd.StringDtype):
-            df[col] = df[col].astype("string[python]")
+        col_dtype = df[col].dtype
+        if isinstance(col_dtype, pd.StringDtype) or col_dtype == object:
+            # Force Python string objects rather than Arrow-backed dtypes
+            df[col] = df[col].astype(str)
 
     return df
