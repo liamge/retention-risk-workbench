@@ -39,9 +39,17 @@ def read_table(path: str | Path) -> pd.DataFrame:
     suffix = path.suffix.lower()
 
     if suffix == ".csv":
-        return pd.read_csv(path)
+        df = pd.read_csv(path)
+    elif suffix in {".parquet", ".pq"}:
+        df = pd.read_parquet(path)
+    else:
+        raise ValueError(f"Unsupported table format: {path.suffix}")
 
-    if suffix in {".parquet", ".pq"}:
-        return pd.read_parquet(path)
+    # Some environments (e.g., Streamlit Cloud) ship Arrow versions that do not
+    # recognize LargeUtf8 columns produced by certain parquet writers. Normalize
+    # string dtypes to the Python-backed string to avoid serialization errors.
+    for col in df.columns:
+        if isinstance(df[col].dtype, pd.StringDtype):
+            df[col] = df[col].astype("string[python]")
 
-    raise ValueError(f"Unsupported table format: {path.suffix}")
+    return df
