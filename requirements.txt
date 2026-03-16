@@ -14,5 +14,8 @@ matplotlib
 optuna
 shap
 streamlit
+# Streamlit versions packaged here import Altair's v4 namespace; pin Altair to v4 to avoid
+# `ModuleNotFoundError: No module named 'altair.vegalite.v4'` on Streamlit Cloud.
+altair<5
 gunicorn
 duckdb
