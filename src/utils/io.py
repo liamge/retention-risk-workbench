@@ -45,9 +45,8 @@ def read_table(path: str | Path) -> pd.DataFrame:
     else:
         raise ValueError(f"Unsupported table format: {path.suffix}")
 
-    # Some environments (e.g., Streamlit Cloud) ship Arrow versions that do not
-    # recognize LargeUtf8 columns produced by certain parquet writers. Normalize
-    # string dtypes to the Python-backed string to avoid serialization errors.
+    # Normalize dtypes to avoid Arrow LargeUtf8 issues on Streamlit Cloud
+    df = df.convert_dtypes(dtype_backend="python")
     for col in df.columns:
         if isinstance(df[col].dtype, pd.StringDtype):
             df[col] = df[col].astype("string[python]")

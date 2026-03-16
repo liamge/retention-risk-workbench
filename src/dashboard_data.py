@@ -194,6 +194,14 @@ def summarize_business_view(pred_df: Optional[pd.DataFrame], metadata: Dict) -> 
     if theme_summary.empty:
         theme_summary = _theme_summary_from_shap(metadata)
 
+    # Ensure string-backed columns avoid Arrow LargeUtf8 issues in Streamlit
+    for df in (action_summary, theme_summary):
+        for col in df.columns:
+            if df[col].dtype == "string[python]" or df[col].dtype == "string":
+                df[col] = df[col].astype("string[python]")
+            elif df[col].dtype == object:
+                df[col] = df[col].astype("string[python]")
+
     top_theme = theme_summary.iloc[0]["driver_theme"] if not theme_summary.empty else "N/A"
 
     insights = [
