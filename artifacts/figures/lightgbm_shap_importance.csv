@@ -1,0 +1,31 @@
+feature,mean_abs_shap
+num__is_month_to_month,0.8272629125132156
+num__tenure,0.5045810482156546
+num__price_ratio,0.3269879043029527
+num__MonthlyCharges,0.2921021302812536
+num__avg_monthly_spend,0.2825651351564305
+cat__Contract_Two year,0.25496554631849067
+num__TotalCharges,0.2128726894808273
+num__fiber_customer,0.196653199543647
+cat__TechSupport_No,0.16617942585900547
+num__electronic_check,0.14077157285359446
+cat__OnlineSecurity_No,0.12723145150379805
+num__revenue_risk_proxy,0.11891684512698374
+num__has_support,0.11726097737610784
+num__paperless,0.10166136822460284
+num__month_to_month_no_support,0.09595405070489456
+cat__MultipleLines_No,0.09558239417256127
+cat__StreamingMovies_Yes,0.09156349709282807
+cat__PaymentMethod_Mailed check,0.09155314318705356
+num__low_tenure_high_bill,0.0910166545865121
+cat__Contract_One year,0.07966161822179589
+cat__OnlineBackup_No,0.062243369685810644
+cat__Dependents_No,0.05748395511014079
+cat__gender_Female,0.052181261363377536
+num__SeniorCitizen,0.051194840924826464
+num__num_services,0.047977468566052055
+num__fiber_monthly,0.047641980028280725
+cat__Contract_Month-to-month,0.04085905647624927
+cat__PaymentMethod_Bank transfer (automatic),0.03926094060715618
+cat__PaymentMethod_Credit card (automatic),0.03381119926275677
+cat__StreamingTV_Yes,0.02990863242416878

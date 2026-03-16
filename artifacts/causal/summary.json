@@ -1,0 +1,9 @@
+{
+  "ate": -1.0,
+  "treated_mean": 0.0,
+  "control_mean": 1.0,
+  "uplift_direction": "improves",
+  "qini": -5.0,
+  "uplift_top_bin": 0.0,
+  "budget_fraction": 0.5
+}

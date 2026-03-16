@@ -1,0 +1,3 @@
+segment,ate,treated_mean,control_mean,uplift_direction
+A,-1.0,0.0,1.0,improves
+B,-1.0,0.0,1.0,improves

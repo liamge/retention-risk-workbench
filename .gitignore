@@ -5,6 +5,9 @@ __pycache__/
 
 # Data
 data/
+# keep prediction batches for the dashboard
+!data/predictions/
+!data/predictions/**
 
 # environments
 .venv/
@@ -18,8 +21,11 @@ venv/
 
 # ML artifacts
 mlruns/
-artifacts/
-data/predictions/
+# bundle dashboard artifacts (models, metrics, figures)
+!artifacts/
+!artifacts/**
+# still ignore any large tuning logs if they appear
+artifacts/tuning/
 
 # logs
 *.log

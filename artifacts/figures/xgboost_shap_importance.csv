@@ -1,0 +1,31 @@
+feature,mean_abs_shap
+num__is_month_to_month,0.5376858
+num__tenure,0.34099773
+num__price_ratio,0.18759558
+cat__OnlineSecurity_No,0.18181981
+num__avg_monthly_spend,0.18145652
+cat__TechSupport_No,0.17357795
+num__MonthlyCharges,0.16350204
+cat__Contract_Month-to-month,0.13796377
+cat__Contract_Two year,0.1328412
+num__fiber_monthly,0.122752294
+num__paperless,0.110614456
+num__TotalCharges,0.10234392
+num__fiber_customer,0.097370535
+num__electronic_check,0.08955945
+num__revenue_risk_proxy,0.07730983
+cat__MultipleLines_No,0.07690207
+cat__StreamingMovies_Yes,0.06934814
+num__low_tenure_high_bill,0.06418052
+cat__PaymentMethod_Electronic check,0.052201606
+cat__Dependents_No,0.050978508
+cat__Contract_One year,0.050693184
+cat__OnlineBackup_No,0.045668725
+num__has_support,0.045564
+num__month_to_month_no_support,0.030085973
+cat__PaymentMethod_Mailed check,0.02789703
+cat__InternetService_Fiber optic,0.027410112
+cat__PaperlessBilling_No,0.027093168
+num__SeniorCitizen,0.024508012
+cat__StreamingTV_No,0.024227098
+num__num_services,0.024031015

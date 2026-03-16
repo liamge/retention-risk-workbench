@@ -1,0 +1,31 @@
+feature,mean_abs_shap
+num__tenure,0.7820149220856534
+num__MonthlyCharges,0.7713092079723733
+cat__Contract_Two year,0.5892266136204535
+num__fiber_customer,0.5770573588615746
+cat__tenure_group_new,0.4092573377948554
+num__is_month_to_month,0.39974879121466234
+cat__customer_stage_established,0.36137100967647096
+num__num_services,0.31334865482298374
+num__service_adoption_rate,0.31334865482298374
+cat__Contract_One year,0.2752509724476645
+cat__DeviceProtection_No internet service,0.24952582997846262
+cat__OnlineSecurity_No internet service,0.24952582997846262
+cat__OnlineBackup_No internet service,0.24952582997846262
+cat__InternetService_No,0.24952582997846262
+cat__TechSupport_No internet service,0.24952582997846262
+cat__StreamingTV_No internet service,0.24952582997846262
+cat__StreamingMovies_No internet service,0.24952582997846262
+cat__customer_stage_new,0.24315911232100967
+num__TotalCharges,0.24248018879377922
+cat__StreamingMovies_No,0.21120609654325012
+cat__tenure_group_0-1yr,0.20680885746897995
+cat__Dependents_Yes,0.20600022054503292
+cat__StreamingMovies_Yes,0.20498015195315866
+cat__StreamingTV_No,0.20431798985367558
+cat__StreamingTV_Yes,0.19809204526357047
+cat__tenure_group_2-4yr,0.18248778628151907
+cat__MultipleLines_No,0.1808968614727706
+cat__InternetService_DSL,0.18068799766074245
+num__high_value_long_tenure,0.18047348111170278
+num__month_to_month_no_support,0.17710660318603597

@@ -1,0 +1,19 @@
+{
+  "best_value": 0.9959810874704492,
+  "best_params": {
+    "n_estimators": 245,
+    "max_depth": 0,
+    "num_leaves": 68,
+    "learning_rate": 0.01746759442053862,
+    "subsample": 0.8277157178049909,
+    "colsample_bytree": 0.6047944952690826,
+    "reg_lambda": 0.0044199075356503095,
+    "min_child_samples": 31
+  },
+  "best_trial_number": 22,
+  "objective_metric": "roc_auc",
+  "best_threshold": 0.47000000000000003,
+  "roc_auc": 0.9959810874704492,
+  "pr_auc": 0.9571551252881545,
+  "f1": 0.9444444444444444
+}

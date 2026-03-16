@@ -1,0 +1,31 @@
+feature,mean_abs_shap
+num__MonthlyCharges,0.8395602899940272
+num__tenure,0.6626602851812307
+cat__Contract_Two year,0.6162454497408999
+num__fiber_customer,0.5009684387694474
+num__is_month_to_month,0.4826475212618613
+num__avg_monthly_spend,0.4351856242763755
+num__TotalCharges,0.389392215852131
+cat__tenure_group_new,0.3792953581829372
+cat__customer_stage_established,0.33911325058124664
+cat__Contract_One year,0.2693675054393568
+cat__customer_stage_new,0.2654871824707096
+num__revenue_risk_proxy,0.24811270733153706
+cat__PhoneService_Yes,0.22328772067120845
+cat__Dependents_Yes,0.20965873032425694
+num__service_adoption_rate,0.20891364915487
+num__num_services,0.20891364915487
+cat__StreamingMovies_No internet service,0.20637870921331913
+cat__StreamingTV_No internet service,0.20637870921331913
+cat__TechSupport_No internet service,0.20637870921331913
+cat__DeviceProtection_No internet service,0.20637870921331913
+cat__OnlineBackup_No internet service,0.20637870921331913
+cat__OnlineSecurity_No internet service,0.20637870921331913
+cat__InternetService_No,0.20637870921331913
+cat__MultipleLines_No,0.20034630137347986
+cat__tenure_group_2-4yr,0.19238527638036787
+cat__StreamingMovies_No,0.1797867639121342
+cat__InternetService_DSL,0.1754682107119683
+cat__StreamingTV_No,0.16952869540428311
+cat__tenure_group_0-1yr,0.16884895549567142
+cat__PaperlessBilling_No,0.16844330968422122
