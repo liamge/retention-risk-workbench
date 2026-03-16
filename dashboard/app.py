@@ -176,7 +176,8 @@ with tab_tech:
         if path.exists():
             with cols[i % 2]:
                 st.markdown(f"**{label}**")
-                st.image(str(path), use_container_width=True)
+                # use_column_width is supported across older Streamlit versions used on Streamlit Cloud
+                st.image(str(path), use_column_width=True)
         i += 1
 
     st.markdown("### Top SHAP Features")
