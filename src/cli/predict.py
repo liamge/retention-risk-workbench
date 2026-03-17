@@ -33,8 +33,34 @@ def parse_args():
     return parser.parse_args()
 
 
-def estimate_monthly_value(row: pd.Series) -> float:
-    """Heuristic monthly revenue proxy that works for KKBox engineered features."""
+def estimate_monthly_value(row: pd.Series, dataset_type: str) -> float:
+    """Heuristic monthly revenue proxy.
+
+    Telco: use MonthlyCharges when available (fallback: TotalCharges / tenure).
+    KKBox/other: use payment-derived signals as before.
+    """
+
+    if dataset_type == "telco":
+        # Primary: explicit monthly charge
+        charge = row.get("MonthlyCharges")
+        if charge is not None and not pd.isna(charge):
+            try:
+                return float(charge)
+            except Exception:
+                pass
+
+        # Fallback: total divided by tenure months
+        total = row.get("TotalCharges")
+        tenure = row.get("tenure")
+        if total is not None and tenure not in (None, 0, "0", "0.0"):
+            try:
+                return float(total) / float(tenure)
+            except Exception:
+                return 0.0
+
+        return 0.0
+
+    # KKBox & others: use payment history
     candidates = [
         ("latest_actual_amount_paid", "latest_payment_plan_days"),
         ("avg_amount_paid", None),
@@ -183,7 +209,7 @@ def main(args: argparse.Namespace | None = None) -> int:
     out["recommended_action"] = out["churn_probability"].apply(lambda x: recommended_action(x, threshold))
     out["model_threshold"] = threshold
     out["scored_at"] = datetime.utcnow().isoformat()
-    out["estimated_monthly_value"] = out.apply(estimate_monthly_value, axis=1)
+    out["estimated_monthly_value"] = out.apply(lambda row: estimate_monthly_value(row, dataset_type), axis=1)
     out["expected_revenue_at_risk"] = out["churn_probability"] * out["estimated_monthly_value"]
 
     explanation_df = build_row_level_explanations(model, X)

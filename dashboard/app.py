@@ -21,6 +21,8 @@ from src.dashboard_data import (
 
 st.set_page_config(page_title="Customer Churn Intelligence Dashboard", layout="wide")
 
+CAUSAL_ENABLED = False  # Hide causal uplift tab temporarily
+
 ROOT_ARTIFACT_DIR = Path("artifacts")
 ROOT_PREDICTION_DIR = Path("data/predictions")
 
@@ -97,15 +99,18 @@ st.title("Customer Churn Intelligence Dashboard")
 st.caption("Refresh after a new training or scoring run to load the latest artifacts.")
 st.caption(f"Artifacts: {ARTIFACT_DIR} | Predictions: {PREDICTION_DIR}")
 
-tab_exec, tab_tech, tab_models, tab_customers, tab_causal = st.tabs(
-    [
-        "Executive Summary",
-        "Technical Performance",
-        "Model Comparison",
-        "High-Risk Customers",
-        "Causal Uplift",
-    ]
-)
+tab_labels = [
+    "Executive Summary",
+    "Technical Performance",
+    "Model Comparison",
+    "High-Risk Customers",
+]
+if CAUSAL_ENABLED:
+    tab_labels.append("Causal Uplift")
+
+tabs = st.tabs(tab_labels)
+tab_exec, tab_tech, tab_models, tab_customers = tabs[:4]
+tab_causal = tabs[4] if CAUSAL_ENABLED else None
 
 is_kkbox = "kkbox" in ARTIFACT_DIR.name.lower()
 
@@ -269,37 +274,38 @@ with tab_customers:
     else:
         st.info("No scored prediction file found yet.")
 
-with tab_causal:
-    st.subheader("Causal Uplift & Policy")
+if CAUSAL_ENABLED and tab_causal:
+    with tab_causal:
+        st.subheader("Causal Uplift & Policy")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("ATE (treatment - control)", f"{causal['ate']:.3f}")
-    c2.metric("Top Bin Uplift", f"{causal['top_bin_uplift']:.3f}")
-    c3.metric("Qini / Cum. Uplift", f"{causal['qini']:.3f}")
-    c4.metric("Budget Fraction", f"{causal['budget_fraction']:.0%}")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("ATE (treatment - control)", f"{causal['ate']:.3f}")
+        c2.metric("Top Bin Uplift", f"{causal['top_bin_uplift']:.3f}")
+        c3.metric("Qini / Cum. Uplift", f"{causal['qini']:.3f}")
+        c4.metric("Budget Fraction", f"{causal['budget_fraction']:.0%}")
 
-    if causal.get("insights"):
-        st.markdown("### Executive Takeaways")
-        for insight in causal["insights"]:
-            st.write(f"- {insight}")
+        if causal.get("insights"):
+            st.markdown("### Executive Takeaways")
+            for insight in causal["insights"]:
+                st.write(f"- {insight}")
 
-    st.markdown("### Uplift Curve")
-    uplift_df = causal.get("uplift_table")
-    if uplift_df is not None and not uplift_df.empty:
-        chart_df = _st_safe_df(uplift_df[["bin", "cumulative_uplift"]])
-        st.line_chart(chart_df, x="bin", y="cumulative_uplift")
-        st.dataframe(_st_safe_df(uplift_df), use_container_width=True)
-    else:
-        st.info("No uplift table found. Generate causal artifacts with `src/reporting/causal_report.py`.")
+        st.markdown("### Uplift Curve")
+        uplift_df = causal.get("uplift_table")
+        if uplift_df is not None and not uplift_df.empty:
+            chart_df = _st_safe_df(uplift_df[["bin", "cumulative_uplift"]])
+            st.line_chart(chart_df, x="bin", y="cumulative_uplift")
+            st.dataframe(_st_safe_df(uplift_df), use_container_width=True)
+        else:
+            st.info("No uplift table found. Generate causal artifacts with `src/reporting/causal_report.py`.")
 
-    st.markdown("### Targeting Policy")
-    policy_df = causal.get("policy")
-    if policy_df is not None and not policy_df.empty:
-        st.dataframe(_st_safe_df(policy_df), use_container_width=True)
-    else:
-        st.info("No policy recommendations available yet.")
+        st.markdown("### Targeting Policy")
+        policy_df = causal.get("policy")
+        if policy_df is not None and not policy_df.empty:
+            st.dataframe(_st_safe_df(policy_df), use_container_width=True)
+        else:
+            st.info("No policy recommendations available yet.")
 
-    cate_df = causal.get("cate")
-    if cate_df is not None and not cate_df.empty:
-        st.markdown("### Segment CATE (largest absolute uplift first)")
-        st.dataframe(_st_safe_df(cate_df.head(10)), use_container_width=True)
+        cate_df = causal.get("cate")
+        if cate_df is not None and not cate_df.empty:
+            st.markdown("### Segment CATE (largest absolute uplift first)")
+            st.dataframe(_st_safe_df(cate_df.head(10)), use_container_width=True)
