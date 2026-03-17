@@ -42,6 +42,41 @@ ARTIFACT_DIR = artifact_options[selected_label]
 pred_subdir = ARTIFACT_DIR.name if ARTIFACT_DIR != ROOT_ARTIFACT_DIR else ""
 PREDICTION_DIR = ROOT_PREDICTION_DIR / pred_subdir if pred_subdir else ROOT_PREDICTION_DIR
 
+
+def _st_safe_df(df: pd.DataFrame | None) -> pd.DataFrame | None:
+    if df is None:
+        return None
+    out = df.copy()
+
+    if not isinstance(out.index, pd.RangeIndex):
+        out = out.reset_index()
+    else:
+        out = out.reset_index(drop=True)
+
+    out.columns = [str(c) for c in out.columns]
+
+    for col in out.columns:
+        series = out[col]
+        if pd.api.types.is_categorical_dtype(series):
+            series = series.astype(str)
+        elif pd.api.types.is_datetime64_any_dtype(series):
+            series = pd.to_datetime(series, errors="coerce").astype(str)
+        elif pd.api.types.is_string_dtype(series) or pd.api.types.is_object_dtype(series):
+            series = series.astype("string[python]").fillna("").astype(object)
+        out[col] = series
+
+    return out
+
+
+def _st_safe_bar_source(obj: pd.Series | pd.DataFrame, label_name: str, value_name: str) -> pd.DataFrame:
+    if isinstance(obj, pd.Series):
+        df = obj.rename(value_name).reset_index()
+        df.columns = [label_name, value_name]
+    else:
+        df = obj.copy()
+        df.columns = [str(c) for c in df.columns]
+    return _st_safe_df(df)
+
 artifacts = load_artifacts(ARTIFACT_DIR)
 causal_artifacts = load_causal_artifacts(ARTIFACT_DIR)
 pred_df = load_latest_predictions(PREDICTION_DIR)
@@ -114,9 +149,11 @@ with tab_exec:
     with left:
         st.markdown("### Recommended Actions")
         if not business["action_summary"].empty:
-            st.dataframe(business["action_summary"], use_container_width=True)
+            st.dataframe(_st_safe_df(business["action_summary"]), use_container_width=True)
             st.bar_chart(
-                business["action_summary"].set_index("recommended_action")["customer_count"]
+                _st_safe_bar_source(business["action_summary"], "recommended_action", "customer_count"),
+                x="recommended_action",
+                y="customer_count",
             )
         else:
             st.info("No action summary available yet.")
@@ -124,13 +161,13 @@ with tab_exec:
     with right:
         st.markdown("### Dominant Driver Themes")
         if not business["theme_summary"].empty:
-            st.dataframe(business["theme_summary"], use_container_width=True)
-            bar_source = (
-                business["theme_summary"].set_index("driver_theme")["importance"]
-                if "importance" in business["theme_summary"].columns
-                else business["theme_summary"].set_index("driver_theme")["customer_count"]
+            st.dataframe(_st_safe_df(business["theme_summary"]), use_container_width=True)
+            value_col = "importance" if "importance" in business["theme_summary"].columns else "customer_count"
+            st.bar_chart(
+                _st_safe_df(business["theme_summary"][["driver_theme", value_col]]),
+                x="driver_theme",
+                y=value_col,
             )
-            st.bar_chart(bar_source)
         else:
             st.info("No driver theme summary available yet.")
 
@@ -146,7 +183,11 @@ with tab_exec:
                 include_lowest=True,
             ).value_counts().sort_index()
         )
-        st.bar_chart(risk_series)
+        st.bar_chart(
+            _st_safe_bar_source(risk_series, "risk_tier", "customer_count"),
+            x="risk_tier",
+            y="customer_count",
+        )
 
 with tab_tech:
     st.subheader("Technical Performance")
@@ -182,8 +223,12 @@ with tab_tech:
 
     st.markdown("### Top SHAP Features")
     if not shap_importance.empty:
-        st.dataframe(shap_importance.head(20), use_container_width=True)
-        st.bar_chart(shap_importance.head(15).set_index("feature")["mean_abs_shap"])
+        st.dataframe(_st_safe_df(shap_importance.head(20)), use_container_width=True)
+        st.bar_chart(
+            _st_safe_df(shap_importance.head(15)[["feature", "mean_abs_shap"]]),
+            x="feature",
+            y="mean_abs_shap",
+        )
     else:
         st.info("No SHAP importance table found.")
 
@@ -193,7 +238,7 @@ with tab_tech:
 with tab_models:
     st.subheader("Candidate Model Comparison")
     if candidate_results is not None and not candidate_results.empty:
-        st.dataframe(candidate_results, use_container_width=True)
+        st.dataframe(_st_safe_df(candidate_results), use_container_width=True)
 
         metric_choice = st.selectbox(
             "Compare by metric",
@@ -202,8 +247,8 @@ with tab_models:
         )
 
         if metric_choice in candidate_results.columns:
-            chart_df = candidate_results.set_index("model_name")[[metric_choice]]
-            st.bar_chart(chart_df)
+            chart_df = _st_safe_df(candidate_results[["model_name", metric_choice]])
+            st.bar_chart(chart_df, x="model_name", y=metric_choice)
     else:
         st.info("No candidate model results found.")
 
@@ -212,11 +257,15 @@ with tab_customers:
     high_risk_df = top_risk_customers(pred_df)
 
     if high_risk_df is not None and not high_risk_df.empty:
-        st.dataframe(high_risk_df, use_container_width=True)
+        st.dataframe(_st_safe_df(high_risk_df), use_container_width=True)
 
         if "primary_driver_theme" in high_risk_df.columns:
             st.markdown("### Driver Theme Mix in Top-Risk Customers")
-            st.bar_chart(high_risk_df["primary_driver_theme"].value_counts())
+            st.bar_chart(
+                _st_safe_bar_source(high_risk_df["primary_driver_theme"].value_counts(), "driver_theme", "customer_count"),
+                x="driver_theme",
+                y="customer_count",
+            )
     else:
         st.info("No scored prediction file found yet.")
 
@@ -237,20 +286,20 @@ with tab_causal:
     st.markdown("### Uplift Curve")
     uplift_df = causal.get("uplift_table")
     if uplift_df is not None and not uplift_df.empty:
-        chart_df = uplift_df[["bin", "cumulative_uplift"]].set_index("bin")
-        st.line_chart(chart_df)
-        st.dataframe(uplift_df, use_container_width=True)
+        chart_df = _st_safe_df(uplift_df[["bin", "cumulative_uplift"]])
+        st.line_chart(chart_df, x="bin", y="cumulative_uplift")
+        st.dataframe(_st_safe_df(uplift_df), use_container_width=True)
     else:
         st.info("No uplift table found. Generate causal artifacts with `src/reporting/causal_report.py`.")
 
     st.markdown("### Targeting Policy")
     policy_df = causal.get("policy")
     if policy_df is not None and not policy_df.empty:
-        st.dataframe(policy_df, use_container_width=True)
+        st.dataframe(_st_safe_df(policy_df), use_container_width=True)
     else:
         st.info("No policy recommendations available yet.")
 
     cate_df = causal.get("cate")
     if cate_df is not None and not cate_df.empty:
         st.markdown("### Segment CATE (largest absolute uplift first)")
-        st.dataframe(cate_df.head(10), use_container_width=True)
+        st.dataframe(_st_safe_df(cate_df.head(10)), use_container_width=True)
