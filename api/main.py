@@ -92,14 +92,35 @@ def risk_tier(prob: float) -> str:
     return "high"
 
 
-def recommended_action(prob: float, monthly_charges: Optional[float]) -> str:
-    if prob >= 0.70:
-        return "priority retention outreach"
-    if prob >= 0.45:
-        return "targeted save offer"
-    if monthly_charges and monthly_charges >= 80:
-        return "light-touch account review"
-    return "monitor"
+def recommended_action(prob: float, threshold: float, monthly_charges: Optional[float] = None) -> str:
+    """Align API action playbook with batch scoring logic.
+
+    The top tier still respects the model threshold while adding more
+    granular, telco-friendly categories so downstream dashboards and API
+    clients stay consistent.
+    """
+
+    # Top tier: well above threshold – treat as save attempt
+    if prob >= max(threshold + 0.15, 0.80):
+        return "Save offer: retention specialist call + bill credit"
+
+    # At/above threshold: personalized outreach
+    if prob >= threshold:
+        return "High-touch outreach: contract renewal or loyalty perks"
+
+    # Mid tier: likely churn but below threshold – try lower-cost nudge
+    if prob >= 0.55:
+        return "Proactive nudge: speed/bundle upgrade email"
+
+    # Low-mid tier: watchlist with engagement
+    if prob >= 0.33:
+        return "Monitor + CSAT survey follow-up"
+
+    # Optional slight prioritization for high-value customers even if low risk
+    if monthly_charges and monthly_charges >= 120:
+        return "Monitor + CSAT survey follow-up"
+
+    return "No intervention needed"
 
 
 def _predict_dicts(records: List[Dict[str, Any]]) -> List[PredictionResponse]:
@@ -122,7 +143,7 @@ def _predict_dicts(records: List[Dict[str, Any]]) -> List[PredictionResponse]:
             churn_probability=float(prob),
             predicted_churn=int(prob >= threshold),
             risk_tier=risk_tier(float(prob)),
-            recommended_action=recommended_action(float(prob), record.get("MonthlyCharges")),
+            recommended_action=recommended_action(float(prob), threshold, record.get("MonthlyCharges")),
             threshold=threshold,
         ))
     return outputs

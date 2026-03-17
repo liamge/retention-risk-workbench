@@ -66,10 +66,30 @@ def assign_risk_tier(prob: float, threshold: float) -> str:
 
 
 def recommended_action(prob: float, threshold: float) -> str:
+    """Return a richer, telco-friendly action playbook string.
+
+    We use more granularity than the previous three-bucket version so the
+    dashboard's action summary has multiple, meaningful categories to show.
+    Threshold is still respected for the top tier so business rules stay
+    intact.
+    """
+
+    # Top tier: well above threshold – treat as save attempt
+    if prob >= max(threshold + 0.15, 0.80):
+        return "Save offer: retention specialist call + bill credit"
+
+    # At/above threshold: personalized outreach
     if prob >= threshold:
-        return "Priority retention outreach"
+        return "High-touch outreach: contract renewal or loyalty perks"
+
+    # Mid tier: likely churn but below threshold – try lower-cost nudge
+    if prob >= 0.55:
+        return "Proactive nudge: speed/bundle upgrade email"
+
+    # Low-mid tier: watchlist with engagement
     if prob >= 0.33:
-        return "Monitor and light-touch engagement"
+        return "Monitor + CSAT survey follow-up"
+
     return "No intervention needed"
 
 

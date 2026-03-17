@@ -10,6 +10,7 @@ def test_assign_risk_tier_respects_threshold():
 
 
 def test_recommended_action_matches_risk_levels():
-    assert "Priority" in recommended_action(0.9, threshold=0.4)
-    assert "Monitor" in recommended_action(0.5, threshold=0.6)
+    assert "Save offer" in recommended_action(0.9, threshold=0.4)
+    assert "High-touch" in recommended_action(0.6, threshold=0.5)
+    assert "Monitor" in recommended_action(0.4, threshold=0.6)
     assert "No intervention" in recommended_action(0.1, threshold=0.4)
