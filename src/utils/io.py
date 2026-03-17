@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 import json
 import pandas as pd
+from pandas.api import types as ptypes
 import yaml
 
 
@@ -45,18 +46,11 @@ def read_table(path: str | Path) -> pd.DataFrame:
     else:
         raise ValueError(f"Unsupported table format: {path.suffix}")
 
-    # Normalize dtypes to avoid Arrow LargeUtf8 issues on Streamlit Cloud.
-    # Older pandas versions (e.g., on Streamlit Cloud images) do not accept
-    # dtype_backend="python"; fall back to default conversion.
-    try:
-        df = df.convert_dtypes()
-    except Exception:
-        pass
-
+    # Normalize string-like columns to plain Python strings to avoid Arrow LargeUtf8 issues.
     for col in df.columns:
-        col_dtype = df[col].dtype
-        if isinstance(col_dtype, pd.StringDtype) or col_dtype == object:
-            # Force Python string objects rather than Arrow-backed dtypes
-            df[col] = df[col].astype(str)
+        series = df[col]
+        if ptypes.is_string_dtype(series) or ptypes.is_object_dtype(series) or ptypes.is_categorical_dtype(series):
+            # Force Python string objects rather than Arrow/pyarrow-backed dtypes
+            df[col] = series.astype(str)
 
     return df
